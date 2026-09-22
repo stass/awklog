@@ -1,0 +1,13 @@
+% spec §45: both body literals are recursive, so the rule runs once per
+% position each round -- delta x p and p x delta -- and every derivation uses
+% at least one row from the previous round.
+p(1, 2).
+p(2, 3).
+p(3, 4).
+p(4, 5).
+
+p(X, Z) :-
+	p(X, Y),
+	p(Y, Z).
+
+p(X, Y)?

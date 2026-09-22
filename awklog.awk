@@ -1,11 +1,11 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Milestone M4 (PLAN.md section 11): option decoding, source collection,
+# Milestone M5 (PLAN.md section 11): option decoding, source collection,
 # lexer, parser, diagnostics, the predicate and tuple tables, fact loading,
-# the safety checks, the dependency graph, stratification, the naive
-# evaluator, queries and text output are in place.  The semi-naive engine
-# (M5), the csv and tsv formats, -s, -n and the REPL (M6) are still to come;
-# -D semi currently runs the naive evaluator.
+# the safety checks, the dependency graph, stratification, both evaluators --
+# the naive oracle behind -D naive and the semi-naive deltas of -D semi --
+# queries and text output are in place.  The csv and tsv formats, -s, -n and
+# the REPL (M6) are still to come.
 #
 # Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
 # PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),
@@ -41,6 +41,8 @@ END {
 	if (!opt_check) {
 		evaluate()
 		run_queries()
+		if (opt_dump)
+			dump_relations()
 		repl()
 	}
 	if (opt_verbose)
@@ -79,6 +81,14 @@ function init() {
 	opt_sort = opt_num(awklog_sort, "AWKLOG_SORT", 0)
 	opt_interactive = opt_num(awklog_interactive, "AWKLOG_INTERACTIVE", 0)
 	opt_verbose = opt_num(awklog_verbose, "AWKLOG_VERBOSE", 0)
+	# Undocumented, and deliberately absent from the wrapper: the
+	# differential harness of spec §76 sets it to have every relation
+	# printed after evaluation, so that the two engines are compared over
+	# the whole model and not only over what the queries happen to ask.
+	# It also suppresses the queries' own rows -- see query_print() -- so
+	# that what reaches stdout is the model and nothing else.  M6's .dump
+	# command prints the same relations.
+	opt_dump = opt_num(awklog_dump, "AWKLOG_DUMP", 0)
 
 	if (opt_format != "text" && opt_format != "csv" && opt_format != "tsv")
 		usage_error("unknown output format: " opt_format)
@@ -116,6 +126,9 @@ function init() {
 	stat_iterations = 0
 	max_stratum = 0
 	join_stop = 0
+	delta_active = 0
+	delta_lit = 0
+	delta_pending = 0
 	exit_code = 0
 	dying = 0
 }
@@ -1042,10 +1055,15 @@ function negative_cycle_pred(   p, q, path) {
 	return 0
 }
 
-# spec §48: a predicate that positively reaches itself within its own stratum
-# is what drives a fixpoint, so the rest can skip the delta loop (M5).  A
-# positive cycle lies wholly inside one stratum, so seeding with same-stratum
-# edges alone loses nothing.
+# spec §48: a predicate that positively reaches itself within its own
+# stratum.  A positive cycle lies wholly inside one stratum, so seeding with
+# same-stratum edges alone loses nothing.
+#
+# This is reported by -v -v and is deliberately not what drives the delta
+# loop: a rule is re-run because it reads a relation this stratum derives,
+# recursively or not (see delta_next_pos), since reach(X) :- path(X, _)
+# beside a recursive path has to keep firing too.  Gating on pred_recursive
+# instead is the bug tests/cases/eval-semi-consumer.dl exists to catch.
 function build_recursive(   p, q) {
 	for (p = 1; p <= pred_n; p++)
 		for (q = 1; q <= pred_n; q++)
@@ -1083,38 +1101,179 @@ function pred_where(p,   r) {
 
 # ------------------------------------------------------------ evaluation ---
 #
-# One stratum at a time, lowest first (spec §39).  A stratum's rules are
-# re-run until a pass derives nothing new, which is the naive evaluator of
-# spec §40; it stays as the correctness oracle behind -D naive, and M5 adds
-# the semi-naive delta loop on top of the same eval_rule/join/match_tuple so
-# the two engines cannot drift apart.
+# One stratum at a time, lowest first (spec §39).  The two engines share
+# eval_rule(), plan_rule(), join(), match_tuple() and emit_head(), and differ
+# only in which rules they re-run and in which relation one designated body
+# literal scans:
+#
+#	-D naive  re-runs every rule in the stratum against the full
+#		  relations until a pass derives nothing (spec §40).  Slow by
+#		  construction and kept as the correctness oracle of
+#		  spec §74 and §76.
+#	-D semi	  runs every rule once, then re-runs only the rules that read
+#		  a predicate this stratum derives, once per such body
+#		  position, with that position scanning the delta
+#		  (spec §41-§46).
+#
+# Sharing the join is what keeps the two from drifting apart: a divergence
+# can only come from the rule and delta selection above, which is exactly
+# what the differential dump compares.
 
 function evaluate(   s) {
 	for (s = 0; s <= max_stratum; s++)
 		eval_stratum(s)
 }
 
+function eval_stratum(s) {
+	if (opt_mode == "naive")
+		eval_naive(s)
+	else
+		eval_semi(s)
+}
+
 # Rules are selected by the stratum of their head, and that is what freezes
 # the lower strata while this one runs (spec §39): no rule evaluated here can
 # insert into a relation belonging anywhere else, so a negated predicate is
 # already complete by the time the stratum negating it is reached.
-function eval_stratum(s,   r) {
+function stratum_rule(r, s) {
+	return !rule_is_fact[r] && !rule_is_query[r] &&
+		stratum[rule_head_pred[r]] == s
+}
+
+# spec §40, and nothing more: re-run the lot until a pass adds nothing.
+# delta_active stays 0 for the whole run, so emit_head records nothing.
+function eval_naive(s,   r) {
 	do {
 		eval_added = 0
 		stat_iterations++
-		for (r = 1; r <= rule_n; r++) {
-			if (rule_is_fact[r] || rule_is_query[r])
-				continue
-			if (stratum[rule_head_pred[r]] != s)
-				continue
-			eval_rule(r)
-		}
+		for (r = 1; r <= rule_n; r++)
+			if (stratum_rule(r, s))
+				eval_rule(r, 0)
 	} while (eval_added)
 }
 
-function eval_rule(r,   n) {
+# spec §41-§46.  The seed pass runs every rule once against the full
+# relations; after it, any derivation still missing must use a tuple that
+# pass produced, so the fixpoint only has to re-run the rules that read a
+# predicate this stratum derives -- once per such position, with that
+# position scanning the delta.
+#
+# Seeding the delta with the whole relation rather than with what the seed
+# pass added (spec §43) re-derives some rows in the first round, which dedup
+# absorbs; in exchange it removes the class of bugs where a predicate holding
+# both facts and rules loses the derivations that start from its facts.
+#
+# stat_iterations counts passes over the stratum's rules, seed pass included,
+# so that the two engines' counts mean the same thing when -v compares them.
+function eval_semi(s,   r, i) {
+	delta_active = 0
+	stat_iterations++
+	for (r = 1; r <= rule_n; r++)
+		if (stratum_rule(r, s))
+			eval_rule(r, 0)
+	# spec §47: a stratum that reads nothing it derives is at its fixpoint
+	# after that one pass, so it never enters the delta loop at all.
+	if (delta_scanned(s) == 0)
+		return
+	delta_seed()
+	delta_active = 1
+	while (delta_pending > 0) {
+		stat_iterations++
+		for (r = 1; r <= rule_n; r++) {
+			if (!stratum_rule(r, s))
+				continue
+			i = 0
+			while ((i = delta_next_pos(r, s, i)) > 0)
+				eval_rule(r, i)
+		}
+		delta_rotate()
+	}
+	delta_active = 0
+}
+
+# The predicates a delta is kept for in this stratum: exactly those read at
+# some position the fixpoint will designate.  Anything else -- a relation
+# from a lower stratum, or a fact-only predicate that happens to sit in this
+# one -- cannot change while the stratum runs, so its delta would be scanned
+# by nobody and would only buy an empty extra round.
+function delta_scanned(s,   r, i, p, n) {
+	array_clear(delta_scan)
+	n = 0
+	for (r = 1; r <= rule_n; r++) {
+		if (!stratum_rule(r, s))
+			continue
+		i = 0
+		while ((i = delta_next_pos(r, s, i)) > 0) {
+			p = rule_lit_pred[r, i]
+			if (p in delta_scan)
+				continue
+			delta_scan[p] = 1
+			n++
+		}
+	}
+	return n
+}
+
+# The next positive body position after "from" whose predicate this stratum
+# derives, or 0.  A fact-only predicate is excluded even when it shares the
+# stratum: it never grows, so no derivation can come to depend on it that did
+# not already.  Note that this is a property of the rule, not of the head:
+# a non-recursive rule reading a recursive relation -- reach(X) :- path(X, _)
+# alongside a recursive path -- has to keep firing as that relation grows.
+function delta_next_pos(r, s, from,   i, p) {
+	for (i = from + 1; i <= rule_body_n[r]; i++) {
+		if (rule_lit_kind[r, i] != 1)
+			continue
+		p = rule_lit_pred[r, i]
+		if (stratum[p] == s && (p in pred_has_rule))
+			return i
+	}
+	return 0
+}
+
+# spec §43: the first round scans the whole of every relation delta_scanned()
+# picked out, not just what the seed pass added.  spec §42: a delta holds
+# tuple ids only, the rows themselves stay in the one tuple table.
+function delta_seed(   p, k, c) {
+	array_clear(delta_t)
+	array_clear(next_t)
+	delta_pending = 0
+	for (p = 1; p <= pred_n; p++) {
+		delta_n[p] = 0
+		next_n[p] = 0
+		if (!(p in delta_scan))
+			continue
+		c = pred_tuple_count[p]
+		for (k = 1; k <= c; k++)
+			delta_t[p, k] = pred_tuple[p, k]
+		delta_n[p] = c
+		delta_pending += c
+	}
+}
+
+# What a round derived becomes what the next round scans.  The rows are
+# copied rather than the two arrays swapped: a swap wants a three-subscript
+# delta_t[phase, p, k], which every read of a delta would then have to spell
+# out, and what is copied is only the ids of what the round just derived.
+function delta_rotate(   p, k) {
+	array_clear(delta_t)
+	delta_pending = 0
+	for (p = 1; p <= pred_n; p++) {
+		delta_n[p] = next_n[p]
+		for (k = 1; k <= next_n[p]; k++)
+			delta_t[p, k] = next_t[p, k]
+		delta_pending += next_n[p]
+		next_n[p] = 0
+	}
+	array_clear(next_t)
+}
+
+# One run of one rule.  d is the body position designated to scan the delta,
+# or 0 for a pass over the full relations.
+function eval_rule(r, d,   n) {
 	stat_rule_runs++
-	n = plan_rule(r)
+	delta_lit = d
+	n = plan_rule(r, d)
 	join(r, n, 1)
 }
 
@@ -1124,11 +1283,21 @@ function eval_rule(r,   n) {
 # whole body regardless of the order it is written in (spec §33), so a source
 # may legally write "not penguin(X), bird(X)" and the negation has to end up
 # after the literal that binds X.
-function plan_rule(r,   n, np, i, best, best_bound, best_size, nb, size) {
+function plan_rule(r, d,   n, np, i, best, best_bound, best_size, nb, size) {
 	n = rule_body_n[r]
 	array_clear(plan_done)
 	array_clear(plan_bound)
 	np = 0
+	# A designated delta literal goes first: every derivation this run is
+	# allowed to make must use it (spec §45), and its relation is the
+	# smallest one in play, so placing it anywhere else would only scan
+	# more rows to reach the same answers.
+	if (d > 0) {
+		np = 1
+		plan[1] = d
+		plan_done[d] = 1
+		plan_mark(r, d)
+	}
 	while (np < n) {
 		# A comparison or negation whose variables are all bound binds
 		# nothing further and can only cut the search, so it is worth
@@ -1207,7 +1376,7 @@ function plan_bound_count(r, i,   k, n) {
 # Recursive nested-loop join over one binding environment (PLAN.md §8.1):
 # each level binds what its literal needs, recurses, then undoes exactly its
 # own bindings.  Depth is the body length, so it stays in single digits.
-function join(r, n, pos,   i, kind, p, c, k, t) {
+function join(r, n, pos,   i, kind, p, c, k, t, use_delta) {
 	if (pos > n) {
 		if (rule_is_query[r])
 			query_emit(r)
@@ -1228,16 +1397,23 @@ function join(r, n, pos,   i, kind, p, c, k, t) {
 		return
 	}
 	p = rule_lit_pred[r, i]
-	# The relation size is read once, before the scan, because a recursive
-	# rule inserts into the very relation it is scanning: rows added while
-	# this scan runs are left to the next round, which is what bounds the
-	# loop.  Rows added earlier in the same round, by another rule or by
-	# an outer level of this one, are in and are scanned -- spec §40 says
-	# "evaluate rule against all facts", not against a frozen snapshot, so
-	# the iteration count depends on the order the rules are written in.
-	c = pred_tuple_count[p]
+	# The designated position scans only what the previous round derived
+	# (spec §44); every other position scans the whole relation, so each
+	# derivation this run makes uses at least one new tuple (spec §45).
+	#
+	# A delta is fixed for the length of a round -- rows derived now go to
+	# the next one -- but a full relation is not, so its size is read once
+	# before the scan: a recursive rule inserts into the very relation it
+	# is scanning, and rows added while the scan runs are left to the next
+	# round, which is what bounds the loop.  Rows added earlier in the
+	# same round, by another rule or by an outer level of this one, are in
+	# and are scanned -- spec §40 says "evaluate rule against all facts",
+	# not against a frozen snapshot, so the iteration count depends on the
+	# order the rules are written in.
+	use_delta = (i == delta_lit)
+	c = use_delta ? delta_n[p] : pred_tuple_count[p]
 	for (k = 1; k <= c; k++) {
-		t = pred_tuple[p, k]
+		t = use_delta ? delta_t[p, k] : pred_tuple[p, k]
 		stat_tuple_scans++
 		if (match_tuple(r, i, t, pos))
 			join(r, n, pos + 1)
@@ -1349,16 +1525,23 @@ function head_value(r, k) {
 # The head of a rule whose body succeeded.  Deduplication is the tuple
 # store's (spec §25), so a re-derived row costs one hash lookup and does not
 # count as progress.
-function emit_head(r,   p, n, k, argv) {
+function emit_head(r,   p, n, k, t, argv) {
 	p = rule_head_pred[r]
 	n = rule_head_arity[r]
 	for (k = 1; k <= n; k++)
 		argv[k] = head_value(r, k)
-	tuple_add(p, n, argv)
+	t = tuple_add(p, n, argv)
 	if (!tuple_added)
 		return
 	eval_added++
 	stat_derived_facts++
+	# The row joins the next round's delta, but only where some rule in
+	# this stratum scans that predicate's delta: recording it anywhere
+	# else would keep the fixpoint alive for a round that reads it nowhere.
+	if (delta_active && (p in delta_scan)) {
+		next_n[p]++
+		next_t[p, next_n[p]] = t
+	}
 }
 
 # --------------------------------------------------------------- queries ---
@@ -1373,9 +1556,22 @@ function run_queries(   q) {
 		# A blank line between blocks, so several results stay
 		# distinguishable (PLAN.md section 9).
 		if (q > 1)
-			print ""
+			query_print("")
 		query_run(query_rule[q])
 	}
+}
+
+# Every line a query produces goes through here, because a dump run has to
+# suppress the lot.  Rows come out in the order the evaluator reached them,
+# which spec §63 leaves unspecified and which the two engines genuinely
+# differ on -- so letting them into a dump would make two engines that agree
+# on the whole model look as though they disagreed.  The queries still run:
+# they cannot change a relation, but a comparison against a non-numeric
+# operand still has to fail where it would fail without the hook.  M6's -n
+# suppresses exactly these lines.
+function query_print(line) {
+	if (!opt_dump)
+		print line
 }
 
 function query_run(r,   n) {
@@ -1388,7 +1584,11 @@ function query_run(r,   n) {
 	query_rows = 0
 	query_ground = (rule_head_arity[r] == 0)
 	join_stop = 0
-	n = plan_rule(r)
+	# A query scans complete relations, never a delta: evaluation has
+	# finished, and delta_lit is left pointing at whatever body position
+	# the last rule run designated.
+	delta_lit = 0
+	n = plan_rule(r, 0)
 	join(r, n, 1)
 	# Cleared on the way out too: a ground query leaves the flag set, and
 	# evaluation, which M6's REPL re-enters after a query, reads the same
@@ -1398,7 +1598,7 @@ function query_run(r,   n) {
 	# variables are anonymous, since those are never projected -- and a
 	# ground query answers true or false (spec §15).
 	if (query_ground)
-		print (query_rows > 0 ? "true" : "false")
+		query_print(query_rows > 0 ? "true" : "false")
 }
 
 # Columns are the named variables in order of first appearance (spec §14).
@@ -1421,7 +1621,7 @@ function query_emit(r,   k, v, key, row) {
 	if (key in query_seen)
 		return
 	query_seen[key] = 1
-	print row
+	query_print(row)
 }
 
 # ---------------------------------------------------------------- output ---
@@ -1483,6 +1683,44 @@ function text_quote(s,   out, i, c) {
 			out = out c
 	}
 	return out "\""
+}
+
+# ------------------------------------------------------------------ dump ---
+#
+# Every relation, whole, in an order that does not depend on the engine --
+# the differential test of spec §76 compares this between -D naive and -D
+# semi, and the two insert their tuples in different orders by construction.
+# Rows therefore go through sort(1) rather than out as stored: it is the same
+# mechanism -s will use (PLAN.md §14.3) and the only sort available without
+# asort().  A predicate's own line carries its size, so that a relation the
+# other engine left empty is a difference and not a silence.
+#
+# A value is printed with its type letter and always quoted, so that the
+# symbol foo, the string "foo" and the number 42 stay three distinct rows and
+# a value holding a newline stays on one line.  M6's .dump prints this too.
+
+function dump_relations(   p, k, a, t, line, cmd) {
+	cmd = "sort"
+	# The rows reach the terminal through sort's stdout and not through
+	# awk's, so anything already printed has to be pushed out first or it
+	# could land after them.  All four target awks happen to flush at the
+	# pipe themselves, but only fflush() says so (PLAN.md section 13).
+	fflush()
+	for (p = 1; p <= pred_n; p++) {
+		print predicate_label(p) "\t#\t" pred_tuple_count[p] | cmd
+		for (k = 1; k <= pred_tuple_count[p]; k++) {
+			t = pred_tuple[p, k]
+			line = predicate_label(p)
+			for (a = 1; a <= pred_arity[p]; a++)
+				line = line "\t" dump_value(tuple_arg[t, a])
+			print line | cmd
+		}
+	}
+	close(cmd)
+}
+
+function dump_value(v) {
+	return substr(v, 1, 1) text_quote(value_decode(substr(v, 3)))
 }
 
 # ----------------------------------------------------------------- stages ---

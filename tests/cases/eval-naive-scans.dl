@@ -1,0 +1,18 @@
+% The naive half of the pair described in eval-semi-scans.dl: the same
+% eight-node chain, evaluated by the oracle of spec §40 and §74.  Keeping the
+% two as separate cases is what lets each pin its own counters: the harness
+% runs every case under both engines against one expected stderr.
+edge(1, 2).
+edge(2, 3).
+edge(3, 4).
+edge(4, 5).
+edge(5, 6).
+edge(6, 7).
+edge(7, 8).
+
+path(X, Y) :-
+	edge(X, Y).
+
+path(X, Z) :-
+	path(X, Y),
+	edge(Y, Z).

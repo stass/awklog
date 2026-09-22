@@ -1,0 +1,26 @@
+% The transitive closure of an eight-node chain: the program PLAN.md
+% section 11 measures the two engines on.  Its twin, eval-naive-scans, is the
+% same source under -D naive, and both pin the counters -v prints, so a
+% change in either engine's work fails a case instead of passing quietly.
+%
+% Each engine derives the same 28 path rows.  Semi-naive reads 287 tuples
+% against naive's 398, which is the reduction spec §41 exists for.
+% Iterations move the other way -- 7 against 3 -- and that is not a
+% regression: a naive pass is not one step of the closure, because join()
+% re-reads the inner literal's relation size for every outer row and so picks
+% up what the same pass has just derived.  A delta round cannot, since its
+% designated literal scans a delta that is fixed for the round.
+edge(1, 2).
+edge(2, 3).
+edge(3, 4).
+edge(4, 5).
+edge(5, 6).
+edge(6, 7).
+edge(7, 8).
+
+path(X, Y) :-
+	edge(X, Y).
+
+path(X, Z) :-
+	path(X, Y),
+	edge(Y, Z).

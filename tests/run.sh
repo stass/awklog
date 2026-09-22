@@ -13,7 +13,10 @@
 #	NAME.status	expected exit status		(default: 0)
 #
 # Every case runs under -D semi and -D naive, under every awk found, and both
-# engines must produce NAME.out.
+# engines must produce NAME.out.  Each case is then run a third time per awk
+# with AWKLOG_DUMP=1, which prints every relation, and the two engines' dumps
+# must be byte-identical: spec §76 compares the whole model, not only the
+# rows the case's queries happen to ask for.
 #
 # Environment:
 #	AWKS	newline-separated awk commands to test (default: those found)
@@ -99,6 +102,12 @@ run_case() {
 
 	# No arguments by default: a case that prints rows pins the order the
 	# evaluator produces them in, and -s is not implemented until M6.
+	# Since M5 that order is per engine -- spec §63 leaves it unspecified
+	# and the two engines reach rows differently -- so NAME.out has to be
+	# an order both agree on.  A case that grows past the point where they
+	# do must pin one engine in NAME.args, the way eval-semi-scans and
+	# eval-naive-scans do, until -s arrives.  What the engines must always
+	# agree on is the model, and that is diff_case's job, not this one.
 	args=
 	[ -f "$name.args" ] && args=$(cat "$name.args")
 
@@ -143,6 +152,78 @@ run_case() {
 	return 0
 }
 
+# Differential check (spec §76): the same program through both engines must
+# leave every relation identical.  AWKLOG_DUMP prints those relations, sorted,
+# and suppresses the queries' own rows, whose order is an engine artefact and
+# would otherwise make two agreeing engines look like they diverged.
+#
+# -D comes after the case's own arguments so that it wins over any -D they
+# carry: eval-semi-scans and its naive twin pin one engine each, and comparing
+# an engine with itself would prove nothing.
+#
+# The exit statuses must agree too, and a case that exits 0 must dump
+# something.  A case that dies does so under both engines and leaves two empty
+# dumps, which diff calls an agreement -- true, but it is an agreement about
+# nothing, and without this guard a case that started failing for an unrelated
+# reason would go on passing its differential check in silence.  The check-only
+# cases have no model to compare and are skipped by name.
+diff_case() {
+	dl=$1
+	awkcmd=$2
+	name=${dl%.dl}
+	base=${name##*/}
+
+	args=
+	[ -f "$name.args" ] && args=$(cat "$name.args")
+
+	want_status=0
+	[ -f "$name.status" ] && want_status=$(cat "$name.status")
+
+	total=$((total + 1))
+	AWK=$awkcmd; export AWK
+	AWKLOG_DUMP=1; export AWKLOG_DUMP
+	# shellcheck disable=SC2086
+	"$AWKLOG" $args -D semi "$dl" > "$tmp/dump.semi" 2> /dev/null
+	semi_status=$?
+	# shellcheck disable=SC2086
+	"$AWKLOG" $args -D naive "$dl" > "$tmp/dump.naive" 2> /dev/null
+	naive_status=$?
+	unset AWKLOG_DUMP
+
+	if [ "$semi_status" -ne "$naive_status" ]; then
+		report_fail "$base" "$awkcmd" "naive/semi" \
+			"exit status $naive_status under naive, $semi_status under semi"
+		return 1
+	fi
+	if [ "$semi_status" -ne "$want_status" ]; then
+		report_fail "$base" "$awkcmd" "naive/semi" \
+			"exit status $semi_status with AWKLOG_DUMP set, expected $want_status"
+		return 1
+	fi
+
+	if ! diff -u "$tmp/dump.naive" "$tmp/dump.semi" > "$tmp/diff" 2>&1; then
+		report_fail "$base" "$awkcmd" "naive/semi" \
+			"the two engines disagree"
+		sed 's/^/    | /' "$tmp/diff"
+		return 1
+	fi
+
+	# A run that succeeded has a model; an empty dump means the hook, not
+	# the engines, has stopped working.  -c never evaluates, so it has
+	# nothing to dump and is not asked to.
+	if [ "$want_status" -eq 0 ] && ! grep -q . "$tmp/dump.semi"; then
+		case " $args " in
+		*" -c "*)	;;
+		*)	report_fail "$base" "$awkcmd" "naive/semi" \
+				"exited 0 but dumped no relations"
+			return 1 ;;
+		esac
+	fi
+
+	[ "${VERBOSE:-0}" = 1 ] && echo "ok   $base [$awkcmd -D naive/semi]"
+	return 0
+}
+
 # Selected names, or every case.
 if [ "$#" -gt 0 ]; then
 	list=
@@ -169,6 +250,12 @@ while IFS= read -r dl; do
 $AWKS
 AWKS_EOF
 	done
+	while IFS= read -r awkcmd; do
+		[ -z "$awkcmd" ] && continue
+		diff_case "$dl" "$awkcmd"
+	done <<AWKS_EOF
+$AWKS
+AWKS_EOF
 done <<LIST_EOF
 $list
 LIST_EOF

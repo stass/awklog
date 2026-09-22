@@ -136,6 +136,28 @@ but exits 0 whatever it is, so the budget is documentation and not a gate;
 M8 should make it exit non-zero outside the band, which cannot happen earlier
 without making the commit gate red by design for M4-M7.
 
+**Actuals at M5** (semi-naive engine and differential tests landed): the
+evaluation and semi-naive groups now measure 445 lines together against the
+240 budgeted for the pair, up from 280 at M4. Of the 165 lines added, 145 are
+the stratum drivers and the delta machinery — `eval_stratum`, `stratum_rule`,
+`eval_naive`, `eval_semi`, `delta_scanned`, `delta_next_pos`, `delta_seed`,
+`delta_rotate` — and the rest is the delta position threaded through
+`eval_rule`, `plan_rule`, `join` and `emit_head`. The budget's `delta_round`
+never materialised: a round is four lines inside `eval_semi`. What the budget
+did not anticipate is that the delta loop needs two selections the naive
+engine does not — which rules to re-run and which body position to designate
+— and `delta_scanned` and `delta_next_pos` answer those in 17 and 10 lines of
+code, so the overrun is comment and structure rather than an algorithm that
+outgrew its row. `dump_relations` (38 lines, inside the REPL group's 110) arrived at M5
+rather than M6 because M5's exit criterion is stated over `.dump`; the query
+group grew from 58 to 80 for `query_print`, which the dump needs and which
+M6's `-n` will reuse.
+
+The file is 1,758 lines, 558 over the cap, and the ranking of groups by
+absolute excess is now evaluation (445 against 240), parser (253 against
+180), lexer (211 against 130) and checks (124 against 100). M8's trim has no
+slack left to find outside those four.
+
 M4 also refuses `-F csv`, `-F tsv`, `-s`, `-n` and `-i` with a usage error
 instead of accepting and ignoring them. Before queries printed anything the
 difference was invisible; now an ignored `-F csv` would answer a documented
@@ -520,7 +542,7 @@ Each milestone ends with a runnable artifact and its own tests; nothing is
 | M2 | Predicate/tuple tables, value encoding, fact loading | `-c -v` reports correct predicate/fact counts; duplicate facts collapse; `SUBSEP`/`CONVFMT` hazard tests pass |
 | M3 | Safety checks, dependency graph, stratification | spec §32/33/34/50 invalid rules rejected with location; spec §12 negative cycle rejected; strata match spec §12 example |
 | M4 | Naive evaluator + queries + text output | spec §4, §78, §79, §80, §81 examples produce the documented output end to end |
-| M5 | Semi-naive engine + differential tests | `-D naive` and `-D semi` produce identical `.dump` for every case; `stat_iterations`/`stat_tuple_scans` show the expected reduction on `path/2` |
+| M5 | Semi-naive engine + differential tests | `-D naive` and `-D semi` produce identical `.dump` for every case; `stat_tuple_scans` shows the expected reduction on `path/2` (see the note below on `stat_iterations`, which does not) |
 | M6 | csv/tsv, `-s`, `-n`, `-i` REPL, `.stats` | Format and REPL cases pass; quoting cases (comma, embedded quote, tab, newline) pass |
 | M7 | Docs + examples + portability sweep | README (incl. the numeric-precision caveat of spec §7.3 and the reserved word `not`), 3 examples, green under BWK awk, mawk, gawk, gawk --posix |
 | M8 | Random differential testing + size trim | `tests/gen.awk` runs ≥500 generated programs with zero naive/semi divergence; final line count inside 700–1,200 |
@@ -545,8 +567,29 @@ NAME.status    optional expected exit status (default 0)
 
 Run modes: each case is executed under `-D semi` and `-D naive`, and both must
 match `NAME.out`; cases are also run with `AWK=` each of `awk`, `mawk`, `gawk`,
-`gawk --posix` when present. Differential mode additionally compares `.dump`
-output of both engines (spec §76).
+`gawk --posix` when present. Each case is then run once more per awk with
+`AWKLOG_DUMP=1` under each engine, and the two dumps must be byte-identical
+(spec §76) — that compares the whole model rather than only the rows the
+case's queries ask for, and it is what catches a delta the fixpoint forgot to
+maintain. `AWKLOG_DUMP` is an undocumented environment hook, absent from the
+wrapper, that prints what M6's `.dump` will print: one line per predicate
+carrying its size, then one per row, everything through `sort(1)` because the
+two engines insert in different orders, with each value tagged by its type
+letter and quoted so that `foo`, `"foo"` and a value holding a newline stay
+distinct and stay on one line. The hook also suppresses the queries' own
+rows, which are *not* sorted and whose order within a relation is an engine
+artefact — mixing them in would report a divergence for two engines that
+agree on the whole model. `diff_case` additionally requires the two exit
+statuses to match each other and the case's `NAME.status`, and a case that
+exits 0 to have dumped something, so that a case which starts dying for an
+unrelated reason loses its differential coverage loudly rather than quietly.
+
+That per-engine row order is also a live constraint on `NAME.out`, which is
+compared byte-exactly against *both* engines: a case whose rows the two reach
+in different orders cannot be written that way, and must pin one engine in
+`NAME.args` (as `eval-semi-scans` and `eval-naive-scans` do) until `-s`
+arrives at M6. The engines' agreement on the model is `diff_case`'s job, not
+`NAME.out`'s.
 
 Coverage checklist, one case minimum each (spec §75): simple facts; single rule;
 multiple rules; recursive path; cyclic graph recursion; mutual recursion;
@@ -557,7 +600,11 @@ and large; all six comparison operators; type-distinct `=` (`foo` vs `"foo"` vs
 true and false; multi-variable queries; multiple `-q`; each output format;
 `-c`; `-n`; unsafe head variable; unsafe negated variable; unsafe comparison;
 negative recursion rejection; syntax errors at line/column; undefined predicate
-warning; REPL script via stdin.
+warning; REPL script via stdin; semi-naive equivalence (spec §75) — which the
+whole-suite dump comparison gives for every case, plus the three shapes that
+comparison would otherwise only catch by luck: a recursive predicate carrying
+its own facts, a non-recursive rule reading a relation that grows under it,
+and a rule with two recursive literals (spec §45).
 
 `tests/gen.awk` emits random *safe* programs (facts, non-recursive rules,
 recursive rules, stratified negation) with a seed argument so a failure is
@@ -573,6 +620,14 @@ Forbidden: `asort`/`asorti`, `gensub`, `PROCINFO`, arrays of arrays, `@namespace
 Required: `a[x, y]` with `SUBSEP`; `array_clear()` helper; `(k in a)` for
 membership; `sprintf("%d", …)` for integer text; `substr`/`index` for lexing;
 explicit `CONVFMT`/`OFMT`.
+
+`fflush()` is used, once, in `dump_relations`, and is the one function here
+outside POSIX Issue 7 awk (Issue 8 adds it). Rows leave through `sort`'s
+stdout rather than awk's, so anything already printed has to be pushed out
+first or it can land after them. All four awks in the matrix have `fflush()`
+and, measured, all four also flush at the pipe without being asked — the call
+is what makes that a guarantee rather than an observation. `-s` will need the
+same at M6.
 
 `/dev/stderr` and `/dev/stdin` are used but are injectable
 (`AWKLOG_STDERR`, `AWKLOG_STDIN`) for hosts lacking them (spec §64).
@@ -637,7 +692,13 @@ every run and M7 is not blocked on tooling.
 2. No forbidden construct from §13 present (grep-checkable).
 3. All spec §17 grammar forms parse, including zero-arity predicates.
 4. Recursion, mutual recursion, and cyclic graphs terminate with correct results.
-5. Semi-naive deltas demonstrably reduce `stat_tuple_scans` vs. naive on `path/2`.
+5. Semi-naive deltas demonstrably reduce `stat_tuple_scans` vs. naive on
+   `path/2` — `tests/cases/eval-semi-scans` and its naive twin pin 287 tuple
+   scans against 398 on an eight-node chain. `stat_iterations` goes the other
+   way, 7 against 3, and that is not a regression: `join()` re-reads the inner
+   literal's relation size for every outer row, so a naive pass picks up what
+   the same pass has just derived and is not one step of the closure, while a
+   delta round's designated literal scans a delta that is fixed for the round.
 6. Safe stratified negation works; recursion through negation is rejected.
 7. Variables, symbols, strings, integers, and all six comparisons supported.
 8. Embedded and `-q` queries both work; ground queries print `true`/`false`.

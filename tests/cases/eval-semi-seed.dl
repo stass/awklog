@@ -1,0 +1,14 @@
+% spec §43: a recursive predicate that also carries its own facts.  The delta
+% is seeded with the whole relation and not just with what the seed pass
+% derived, so the derivation that starts from path(a, b) -- a row no rule
+% produced -- is not lost.
+path(a, b).
+
+edge(b, c).
+edge(c, d).
+
+path(X, Z) :-
+	path(X, Y),
+	edge(Y, Z).
+
+path(X, Y)?

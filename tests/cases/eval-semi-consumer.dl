@@ -1,0 +1,30 @@
+% A rule may be non-recursive and still have to keep firing.  reaches/1 reads
+% path/2, which grows through the whole fixpoint, and rooted/1 in turn reads
+% reaches/1, which grows with it; all four predicates sit in stratum 0.
+% Running either rule once in the seed pass would report what its input held
+% then, so a delta is owed to every predicate the stratum derives and not
+% only to the ones that are recursive.
+edge(a, b).
+edge(b, c).
+edge(c, d).
+
+start(a).
+start(b).
+
+path(X, Y) :-
+	edge(X, Y).
+
+path(X, Z) :-
+	path(X, Y),
+	edge(Y, Z).
+
+reaches(X) :-
+	path(X, d).
+
+rooted(X) :-
+	reaches(X),
+	start(X).
+
+reaches(X)?
+
+rooted(X)?
