@@ -489,9 +489,9 @@ explicit `CONVFMT`/`OFMT`.
 `/dev/stderr` and `/dev/stdin` are used but are injectable
 (`AWKLOG_STDERR`, `AWKLOG_STDIN`) for hosts lacking them (spec §64).
 
-Local gap: this machine has only BWK awk 20200816. `brew install mawk gawk` is a
-prerequisite for M7's portability sweep; until then the matrix is unverified and
-the plan treats that as an open risk, not a passed criterion.
+Local matrix: BWK awk 20200816 (`/usr/bin/awk`), mawk 1.3.4, gawk 5.4.1, and
+`gawk --posix` are all installed, so `tests/run.sh` exercises the full sweep on
+every run and M7 is not blocked on tooling.
 
 ---
 
@@ -526,7 +526,7 @@ the plan treats that as an open risk, not a passed criterion.
 | Line budget overrun (spec §88.11) | per-group budget in §3, checked at each milestone; naive engine shares `eval_rule` |
 | `exit` semantics differing between main rule and `END` | all stages run in `END`; `die()` only called from there |
 | REPL input source clashing with a program read from stdin | `AWKLOG_STDIN` injectable; document that `-i` with a stdin program is unsupported |
-| Portability unverified without mawk/gawk installed | install both before M7; treat M7 as blocked until then |
+| A portability break slipping in between sweeps | all four awks are installed locally; `tests/run.sh` runs every case under each of them, so the sweep is continuous rather than an M7 event |
 | Deep recursion in `join` on a long rule body | depth = body length; document a practical limit and test a 12-literal body |
 
 ---
