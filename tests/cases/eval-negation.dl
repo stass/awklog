@@ -1,4 +1,4 @@
-% spec §80: stratified negation.
+% Stratified negation: every bird flies except the penguin.
 bird(tweety).
 bird(opus).
 

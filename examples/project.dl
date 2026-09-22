@@ -1,4 +1,4 @@
-% project.dl -- a small task tracker (spec §78, extended).
+% project.dl -- a small task tracker.
 %
 %	awklog examples/project.dl
 %	awklog -q 'blocked_by(storage, Y)?' examples/project.dl

@@ -1,4 +1,4 @@
-% spec §45: both body literals are recursive, so the rule runs once per
+% Both body literals are recursive, so the rule runs once per
 % position each round -- delta x p and p x delta -- and every derivation uses
 % at least one row from the previous round.
 p(1, 2).

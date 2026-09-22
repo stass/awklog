@@ -1,6 +1,6 @@
 % Safety is decided over the whole body regardless of the order it is
-% written in (spec §33), so the evaluator has to move a negation and a
-% comparison after the literals that bind their variables (spec §35).
+% written in, so the evaluator has to move a negation and a comparison
+% after the literals that bind their variables.
 bird(tweety).
 bird(opus).
 penguin(opus).

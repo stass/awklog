@@ -1,2 +1,2 @@
-% "not" must be followed by an atom, not by a term (spec §17).
+% "not" must be followed by an atom, not by a term.
 ready(X) :- todo(X), not _.

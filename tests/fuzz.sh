@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# awklog random differential test (spec §76-77, PLAN.md section 12).
+# awklog random differential test.
 #
 #	tests/fuzz.sh [count [first-seed]]	(default: 500 programs from seed 1)
 #
@@ -8,12 +8,12 @@
 # every awk found runs it under -D semi and -D naive twice: once with
 # AWKLOG_DUMP set, which prints every relation, sorted, and once with -s,
 # which prints the queries' own rows -- sorted, because their order is an
-# engine artefact (spec §63).  Checked for each program:
+# engine artefact.  Checked for each program:
 #
 #	- both engines exit 0 and print nothing on stderr under every awk: the
 #	  program is legal by construction and defines every predicate it
 #	  reads, so any diagnostic, a warning included, is a bug;
-#	- the two engines' output is byte-identical (spec §76);
+#	- the two engines' output is byte-identical;
 #	- every awk's output is byte-identical to the first awk's, which makes
 #	  this a portability sweep over programs nobody wrote by hand;
 #	- the dump is not empty, so that a broken hook cannot pass as agreement.

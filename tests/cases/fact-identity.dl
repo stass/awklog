@@ -1,4 +1,4 @@
-% A predicate is name/arity (spec §6) and a tuple key carries its predicate, so
+% A predicate is name/arity and a tuple key carries its predicate, so
 % all four rows below are separate: the first three differ in arity, and the
 % last holds the same argument as the first under a different name.
 foo(a).

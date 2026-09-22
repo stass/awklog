@@ -1,5 +1,5 @@
 % -s sorts each query's rows on their own rather than the whole output at
-% once (PLAN.md §14.3), so the blank line between two result blocks stays
+% once, so the blank line between two result blocks stays
 % where it belongs: a single sort over everything would merge the blocks and
 % carry the separator off with the rows.  Both relations are stored in an
 % order sorting has to undo.

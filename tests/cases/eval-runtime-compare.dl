@@ -1,7 +1,7 @@
 % An ordering comparison whose operand arrives through a variable cannot be
-% rejected statically (spec §13), so it is a located run-time error rather
-% than a silent failure indistinguishable from "no such fact"
-% (PLAN.md section 14.7).
+% rejected statically, so it is a located run-time error rather than a
+% silent failure: a comparison that quietly fails would be indistinguishable
+% from "no such fact".
 v(1).
 v(foo).
 

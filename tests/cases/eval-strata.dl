@@ -1,4 +1,4 @@
-% spec §81: three predicates over two strata, the upper one negating twice.
+% Two negations: isolated negates connected, interesting negates boring.
 node(a).
 node(b).
 node(c).

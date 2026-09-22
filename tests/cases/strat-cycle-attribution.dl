@@ -1,7 +1,7 @@
-% Every predicate standing above a negative cycle climbs with it, and the
-% higher ones cross spec §38's bound first, so the diagnostic must not simply
-% name whichever predicate tripped it.  Here the cycle is a <-> b; c, d and e
-% are innocent, and e is the one that reaches the bound first.
+% Every predicate standing above a negative cycle depends on it, but only one
+% on the cycle may be named.  Here the cycle is a <-> b, and c, d and e only
+% negate their way down to it: the diagnostic names a, the first predicate
+% with a negative edge that leads back to itself, and not one above it.
 node(1).
 a(X) :- node(X), not b(X).
 b(X) :- node(X), not a(X).

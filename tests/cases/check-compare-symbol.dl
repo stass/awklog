@@ -1,4 +1,4 @@
-% spec §13: ordering comparisons need numeric operands, and a symbol constant
-% never becomes one, so it is rejected before evaluation.
+% Ordering comparisons need numeric operands, and a symbol constant never
+% becomes one, so it is rejected before evaluation.
 q(1).
 p(X) :- q(X), X < foo.

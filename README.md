@@ -39,6 +39,7 @@ else, except `sort(1)` for `-s`.
 - [Running awklog.awk directly](#running-awklogawk-directly)
 - [Limits](#limits)
 - [Portability](#portability)
+- [Design](#design)
 - [Not in this version](#not-in-this-version)
 - [Development](#development)
 
@@ -337,11 +338,99 @@ every case under each of these, and all pass:
 - gawk 5.4.1
 - gawk 5.4.1 `--posix`
 
+## Design
+
+awklog aims to be small enough to read in one sitting, so it favours plain
+code over clever code and gives up speed where speed would cost clarity.
+
+**Two files.** The `awklog` wrapper parses the command line with `getopts`,
+checks the options and file operands, and runs awk on `awklog.awk`. It passes
+settings in the environment (`AWKLOG_*`) rather than with `awk -v`, because
+`-v` would process backslash escapes in a query. `awklog.awk` does everything
+else.
+
+**One pass, then a pipeline.** awk's main loop only collects source lines,
+with the file and line number each came from. All the real work happens in
+`END`, in order:
+
+1. **Lex and parse.** A hand-written lexer walks a (line, column) cursor over
+   the saved lines, so every token knows its `file:line:column` for free. The
+   parser is recursive descent with one token of lookahead. Facts, rules and
+   queries all become *rules*: a fact is a rule with an empty body, and a query
+   is a rule whose head is its list of named variables. Everything gets an
+   integer id and lives in flat arrays (`rule_lit_pred[r, i]`,
+   `term_val[r, i, k]`, …), since POSIX awk has no nested arrays. Each variable
+   becomes a small numbered slot, so evaluation never looks up a name.
+2. **Load facts** into the tuple store (below).
+3. **Check safety.** For each rule, collect every variable that some positive
+   literal binds, then insist that every variable in the head, in a negation
+   and in a comparison is among them. This ignores the order the body is
+   written in, because evaluation reorders it anyway.
+4. **Stratify.** Build the predicate dependency graph (an edge from each rule
+   head to each body predicate, marked positive or negative) and take its
+   transitive closure. A negative edge whose target leads back to its source
+   is recursion through negation, and the program is rejected. Otherwise a
+   simple relaxation gives each predicate the lowest stratum such that it sits
+   at or above what it uses and strictly above what it negates. The graph is
+   small, so plain O(P³) loops do this without any SCC algorithm.
+5. **Evaluate** one stratum at a time, lowest first. Lower strata are
+   complete and never change while a higher one runs, which is what makes
+   `not` well defined.
+6. **Run queries** against the finished relations, in source order and then
+   `-q` order. A query joins exactly like a rule, but the last step prints a
+   row instead of storing a tuple. `-s` pipes each query's rows through
+   `sort(1)` on their own, since POSIX awk has no sort function.
+
+**Values and tuples.** Every constant is stored with a type tag: `s:foo` for
+a symbol, `q:foo` for a string, `n:42` for a number. That's why `foo`,
+`"foo"` and `42` never compare equal. A row of a relation (a tuple) is stored
+once, under a key made of the predicate id and its encoded arguments joined
+with awk's `SUBSEP` byte. A repeated fact or re-derived row is therefore one
+hash lookup, and relations are sets for free. Two details keep that key
+honest. A backslash or `SUBSEP` byte inside a string is escaped, so no string
+can forge another row's key. And numbers are written with `%d`, or with
+`%.17g` beyond 2⁵³, rather than leaving the spelling to the host awk.
+
+**Joins.** A rule body is evaluated by a recursive nested loop over one
+shared set of variable bindings. Each level scans the relation for its
+literal, binds what it can, recurses into the next literal, then undoes its
+own bindings. Nothing is materialised between literals, and the recursion is
+only as deep as the body is long. A negation is a single key lookup, because
+safety guarantees all its arguments are bound. A comparison is a test on the
+current bindings. There are no indexes. Instead, before each run of a rule,
+the body is reordered: filters go first as soon as their variables are bound,
+then the positive literal with the most bound arguments, then the smallest
+relation, then the earliest in the source. The tie-breaks make the order
+deterministic.
+
+**Semi-naive evaluation.** Within a stratum, every rule first runs once over
+the full relations. After that, any missing derivation must use a row that
+is new since then. So the loop keeps a *delta* (the rows the last round
+added) and re-runs only the rules that read a predicate this stratum
+derives. Each such rule runs once per such body position, with that position
+reading the delta and the rest reading full relations. The first delta is
+the whole relation rather than just the new rows. That costs a little
+repeated work, but it can't miss derivations from a predicate that has both
+facts and rules. A stratum that reads nothing it derives never enters the
+loop.
+
+**The naive engine as a reference.** `-D naive` re-runs every rule in the
+stratum until a whole pass adds nothing. It shares the join, the planner and
+the tuple store with the semi-naive engine, which differs only in which rules
+it re-runs and what one literal scans. The test suite runs everything
+through both engines and requires identical results. The comparison uses an
+undocumented `AWKLOG_DUMP=1` hook that prints every relation, sorted and typed.
+
+**Portability habits.** Membership is always tested with `(k in a)`, since
+`if (a[k])` silently creates the element. Arrays are emptied with a loop,
+since `delete a` is not POSIX. `CONVFMT`, `OFMT` and `SUBSEP` are pinned in
+`BEGIN`, because changing them would quietly change which values count as
+the same.
+
 ## Not in this version
 
-- An interactive mode. The spec describes one; it was written and then
-  removed, and `-q`, `-v` and repeated runs cover the same ground (see
-  `PLAN.md` §14.8).
+- An interactive mode. `-q`, `-v` and repeated runs cover the same ground,
+  and keeping the engine batch-only means an error always ends the run.
 - Arithmetic, aggregates (`count`, `min`, …), string ordering, floating point.
 - Binding a variable with `=`: `=` only compares.
 - JSON output.
@@ -365,8 +454,7 @@ comparisons, all three value types — and `tests/fuzz.sh` runs each through
 both evaluators under every awk: the dumps must match between the engines and
 between the awks. A failure names its seed, and the generator carries its own
 random number generator, so `awk -v seed=N -f tests/gen.awk` rebuilds the same
-program under any awk. `spec.md` is the design
-specification and `PLAN.md` the implementation plan.
+program under any awk.
 
 ## License
 

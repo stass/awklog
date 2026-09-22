@@ -1,5 +1,5 @@
-% spec §12's invalid program, made safe so that stratification is what
-% rejects it rather than the safety checker.
+% Two predicates negating each other, made safe so that stratification is
+% what rejects the program rather than the safety checker.
 node(1).
 node(2).
 a(X) :- node(X), not b(X).

@@ -1,5 +1,5 @@
-% "does any r exist" would need a relation scan, which spec §49 negation does
-% not do: an anonymous variable under not is unbound, hence unsafe.
+% "does any r exist" would need a relation scan, and negation is only ever a
+% membership test: an anonymous variable under not is unbound, hence unsafe.
 q(1).
 r(1).
 p(X) :- q(X), not r(_).

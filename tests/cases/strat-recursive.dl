@@ -1,4 +1,4 @@
-% Recursive components (spec §48): path reaches itself, and p and q reach
+% Recursive components: path reaches itself, and p and q reach
 % themselves through each other; edge and base do not and can skip the delta
 % loop.  All of it is one stratum, since no negation raises anything.
 edge(a, b).

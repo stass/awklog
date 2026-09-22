@@ -1,17 +1,13 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Complete through milestone M8 (PLAN.md section 11): option decoding, source
-# collection, lexer, parser, diagnostics, the predicate and tuple tables,
-# fact loading, the safety checks, the dependency graph, stratification, both
-# evaluators -- the naive oracle behind -D naive and the semi-naive deltas of
-# -D semi -- queries, the text, csv and tsv formats, -s and -n.  README.md
-# documents them.  awklog is batch only: spec §59's interactive mode is not
-# implemented, for the reasons in PLAN.md §14.8.
+# The main rule only collects source lines; everything else runs in END, as a
+# pipeline: parse, load facts, check safety, stratify, evaluate, run queries.
+# README.md describes the language and the design.
 #
-# Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
-# PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),
-# delete of a whole array, or regex shorthands such as \s.  Two-dimensional
-# access is always a[x, y] with an explicit SUBSEP.
+# POSIX awk only.  No gensub, asort/asorti, PROCINFO, arrays of arrays,
+# switch, typeof, indirect calls, length(array), delete of a whole array, or
+# regex shorthands such as \s.  Two-dimensional access is always a[x, y] with
+# an explicit SUBSEP.
 #
 # Settings arrive in the environment as AWKLOG_* (set by the awklog wrapper);
 # an explicit -v awklog_* assignment wins, so direct
@@ -54,16 +50,16 @@ END {
 
 function init() {
 	# Belt and braces only: POSIX converts an integral value with %d and
-	# consults CONVFMT just for the rest, and v1 has no non-integral values
-	# to reach it.  Measured under CONVFMT="%.6g", all four awks render
-	# 1000000 and 100000000000000000 as digits (PLAN.md section 4).
+	# consults CONVFMT just for the rest, and the language has no
+	# non-integral values to reach it.  Numbers that go into tuple keys are
+	# spelled explicitly by number_text() in any case.
 	CONVFMT = "%.17g"
 	OFMT = "%.17g"
 	SUBSEP = sprintf("%c", 28)
 
 	# The lexer classifies bytes with index() into these sets rather than
 	# scanning tokens with match(), which takes no start offset and so would
-	# copy the rest of the line for every token (PLAN.md §14.9).
+	# copy the rest of the line for every token -- quadratic on a long line.
 	UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	LOWER = "abcdefghijklmnopqrstuvwxyz"
 	DIGITS = "0123456789"
@@ -78,10 +74,10 @@ function init() {
 	opt_quiet = opt_num(awklog_quiet, "AWKLOG_QUIET", 0)
 	opt_sort = opt_num(awklog_sort, "AWKLOG_SORT", 0)
 	opt_verbose = opt_num(awklog_verbose, "AWKLOG_VERBOSE", 0)
-	# Undocumented, and deliberately absent from the wrapper: the
-	# differential harness of spec §76 sets it to have every relation
-	# printed after evaluation, so that the two engines are compared over
-	# the whole model and not only over what the queries happen to ask.
+	# Undocumented, and deliberately absent from the wrapper: the test
+	# harness sets it to have every relation printed after evaluation, so
+	# that the two engines are compared over the whole model and not only
+	# over what the queries happen to ask.
 	# It also suppresses the queries' own rows -- see query_print() -- so
 	# that what reaches stdout is the model and nothing else.
 	opt_dump = opt_num(awklog_dump, "AWKLOG_DUMP", 0)
@@ -92,7 +88,7 @@ function init() {
 		usage_error("unknown evaluation mode: " opt_mode)
 
 	# The column separator of each format; how a column itself is spelled
-	# is format_field()'s business (spec §60-62).
+	# is format_field()'s business.
 	if (opt_format == "csv")
 		FIELDSEP = ","
 	else if (opt_format == "tsv")
@@ -101,8 +97,8 @@ function init() {
 		FIELDSEP = " "
 
 	# -s sorts each query's rows on their way out through sort(1), the only
-	# sort available without asort() (spec §63, PLAN.md §14.3).  The dump
-	# uses the same command, and both close it before the other can run.
+	# sort available without asort().  The dump uses the same command, and
+	# both close it before the other can run.
 	SORTCMD = "sort"
 
 	src_n = 0
@@ -147,10 +143,10 @@ function opt_num(v, name, dflt) {
 
 # ------------------------------------------------------------ diagnostics ---
 
-# Messages carry their own classification ("syntax error: ...", "unsafe rule:
-# ...") so that a located diagnostic reads exactly as spec §64 shows it:
+# Messages carry their own classification ("syntax error: ...", "error:
+# unsafe rule: ...") so that a located diagnostic reads
 #
-#	project.dl:14:3: syntax error: expected predicate
+#	project.dl:14:3: syntax error: expected ')', found 'c'
 #
 # All stages run in END, so exit here terminates immediately; the dying flag
 # covers the one caller in BEGIN, where exit would otherwise fall into END.
@@ -226,7 +222,8 @@ function source_where(i, col) {
 }
 
 # Query text from -q becomes ordinary source lines, so it lexes with the same
-# cursor and reports the same file:line:col diagnostics (PLAN.md section 10).
+# cursor and reports the same file:line:col diagnostics.  Several -q queries
+# arrive joined by newlines and so become several lines of "<query>".
 function source_add_query(text,   parts, i, n, start) {
 	start = src_n + 1
 	n = split(text, parts, "\n")
@@ -239,9 +236,8 @@ function source_add_query(text,   parts, i, n, start) {
 #
 # The cursor is (lex_i, lex_col): an index into src_text[] and a 1-based
 # column.  Keeping the lines separate instead of concatenating them into one
-# buffer (spec §19, PLAN.md section 5) gives every token a file:line:col
-# for free; statements still span lines because the scanner walks through line
-# ends transparently.
+# buffer gives every token a file:line:col for free; statements still span
+# lines because the scanner walks through line ends transparently.
 #
 # Token kinds are IDENT, VAR, ANON, INT, STR, not, EOF and the punctuation
 # spelled as itself ("(", ")", ",", ".", "?", ":-", "=", "!=", "<", "<=", ">",
@@ -260,9 +256,9 @@ function lex_start(i) {
 }
 
 # The scanner always fills the lookahead slot pk_*, and lex_next() moves that
-# slot into tok_*; one token of pushback is enough for the whole grammar
-# (spec §17), and keeping the two slots apart saves saving and restoring the
-# current token around every peek.
+# slot into tok_*; one token of pushback is enough for the whole grammar, and
+# keeping the two slots apart saves saving and restoring the current token
+# around every peek.
 function lex_next() {
 	if (!have_peek)
 		lex_scan()
@@ -283,7 +279,7 @@ function lex_peek() {
 }
 
 # Whitespace and %-comments are skipped between tokens, so a % inside a string
-# literal is safe by construction (spec §16).
+# literal is safe by construction.
 function lex_skip_space(   c) {
 	while (lex_i <= src_n) {
 		# substr() past the end of a line returns "", which is how the
@@ -331,8 +327,8 @@ function lex_scan(   line, c, n, span, two) {
 		return pk_kind = lex_word_kind(pk_text)
 	}
 
-	# "-" is a sign on a numeric literal, never an operator: v1 has no
-	# arithmetic (spec §7.3, PLAN.md section 5).
+	# "-" is a sign on a numeric literal, never an operator: there is no
+	# arithmetic.
 	if (c == "-" || index(DIGITS, c) > 0) {
 		n = (c == "-") ? 1 : 0
 		span = lex_span(line, lex_col + n, DIGITS)
@@ -384,7 +380,8 @@ function lex_word_kind(w,   c) {
 		"symbols begin with a lowercase letter, variables with an uppercase one")
 }
 
-# String literals do not span lines; escapes are exactly those of spec §7.2.
+# String literals do not span lines; the escapes are \\ \" \n \t \r and no
+# others.
 function lex_string(line,   col, start, c, esc, out) {
 	start = lex_col
 	col = lex_col + 1
@@ -434,10 +431,10 @@ function predicate_get(name, arity,   key) {
 	pred_name[pred_n] = name
 	pred_arity[pred_n] = arity
 	# Seeded because every relation scan reads it and reading an absent
-	# element would create it (PLAN.md section 15).  pred_has_fact and
-	# pred_has_rule are deliberately left absent instead: seeding them would
-	# make (p in pred_has_rule) true for every predicate, and that test is
-	# how the stratifier will ask whether a predicate has a definition.
+	# element would create it anyway.  pred_has_fact and pred_has_rule are
+	# deliberately left absent instead: seeding them would make
+	# (p in pred_has_rule) true for every predicate, and that test is how
+	# the checker and the delta loop ask whether a predicate is defined.
 	pred_tuple_count[pred_n] = 0
 	return pred_n
 }
@@ -446,8 +443,10 @@ function predicate_label(p) {
 	return pred_name[p] "/" pred_arity[p]
 }
 
-# Constants carry a type tag (spec §26) so that foo, "foo" and 42 are
-# three distinct values under equality and inside tuple keys.
+# Constants carry a type tag -- s: symbol, q: string, n: number -- so that
+# foo, "foo" and 42 are three distinct values under equality and inside tuple
+# keys.  The engine only ever compares and stores encoded values; decoding
+# happens on output.
 function value_encode(kind, text) {
 	if (kind == "n")
 		return "n:" number_text(text + 0)
@@ -478,7 +477,7 @@ function value_escape(s,   out, c, i) {
 # The encoded spelling of a number is built explicitly rather than left to the
 # host's number->string rule: below 2^53 %d is exact, and above it a host's %d
 # may convert through an integer type too narrow to hold the value, so those go
-# through %.17g, which round-trips a double (PLAN.md section 4, spec §7.3).
+# through %.17g, which round-trips a double.
 function number_text(v) {
 	if (v == int(v) && v < 9007199254740992 && v > -9007199254740992)
 		return sprintf("%d", v)
@@ -487,12 +486,13 @@ function number_text(v) {
 
 # ----------------------------------------------------------- tuple store ---
 #
-# A tuple is one ground row of a relation (spec §24).  Rows are interned under
+# A tuple is one ground row of a relation, with an integer id.  Rows are
+# interned under
 #
 #	predicate-id SUBSEP encoded-arg-1 SUBSEP ... SUBSEP encoded-arg-n
 #
 # so re-deriving a row is one hash lookup and set semantics fall out of the
-# array (spec §25).  That key is injective only because value_encode() escapes
+# array.  That key is injective only because value_encode() escapes
 # SUBSEP and the backslash inside constants: otherwise the two rows
 #
 #	p("x" SUBSEP "q:y", "z")	p("x", "y" SUBSEP "q:z")
@@ -533,12 +533,15 @@ function tuple_add(p, n, argv,   key, t, k) {
 
 # ---------------------------------------------------------------- parser ---
 #
-# Recursive descent with one token of lookahead (spec §18).  Facts,
-# rules and queries all become rules: a fact is a rule with an empty body, and
-# a query is a rule whose synthetic head carries its named variables in order
-# of first appearance (spec §14).  The head of a fact or rule is parsed
-# as body literal 1 and moved by rule_promote_head(), because no amount of
-# lookahead at the first literal tells "head :- body" from "literal, literal?".
+# Recursive descent with one token of lookahead.  Facts, rules and queries
+# all become rules: a fact is a rule with an empty body, and a query is a rule
+# whose synthetic head carries its named variables in order of first
+# appearance.  Parsed objects are integer ids into flat arrays -- rule_*[r],
+# rule_lit_*[r, i], term_*[r, i, k] -- rather than ASTs encoded as strings.
+#
+# The head of a fact or rule is parsed as body literal 1 and moved by
+# rule_promote_head(), because no amount of lookahead at the first literal
+# tells "head :- body" from "literal, literal?".
 
 function parse_all(   start) {
 	# Query text is appended to the same array below, so the input-file
@@ -645,8 +648,8 @@ function rule_promote_head(r,   k, n) {
 	}
 }
 
-# A query's columns are its named variables in order of first appearance
-# (spec §14); anonymous variables are never projected.  The head
+# A query's columns are its named variables in order of first appearance;
+# anonymous variables are never projected.  The head
 # predicate stays 0: a query emits rows, it does not populate a relation.
 function rule_query_head(r,   s, n) {
 	n = 0
@@ -750,7 +753,7 @@ function parse_comparison(r, i, ln, col,   op) {
 }
 
 # Terms return through pt_kind/pt_val: 1 variable slot, 2 symbol, 3 string,
-# 4 number, with constants already encoded (spec §26).
+# 4 number, with constants already encoded.
 function parse_term(r,   k) {
 	k = lex_next()
 	if (k == "VAR") {
@@ -774,9 +777,10 @@ function parse_term(r,   k) {
 	}
 }
 
-# Slots are numbered in order of first appearance (spec §22).  Every
-# occurrence of _ gets a fresh nameless slot, so pair(_, _) does not force the
-# two arguments to be equal (spec §9).
+# Each variable becomes a small integer slot, numbered in order of first
+# appearance, so evaluation never looks a name up.  Every occurrence of _ gets
+# a fresh nameless slot, so pair(_, _) does not force the two arguments to be
+# equal.
 function var_slot(r, name,   s) {
 	if (name != "" && (r, name) in rule_var_slot)
 		return rule_var_slot[r, name]
@@ -800,7 +804,7 @@ function expect(kind, what) {
 
 # ---------------------------------------------------------- fact loading ---
 
-# A fact is a rule with an empty body and must be ground (spec §5.1), so it is
+# A fact is a rule with an empty body and must be ground, so it is
 # stored directly instead of being evaluated.  Loading runs before the semantic
 # checks so that -c reports the relation sizes it would really evaluate over,
 # and so that a missing-variable diagnostic names the fact that carries it.
@@ -833,9 +837,9 @@ function load_facts(   r, p, n, k, name, argv) {
 # ---------------------------------------------------------------- checks ---
 #
 # Safety is decided statically and independently of the order the body is
-# written in, because the evaluator reorders literals (spec §33, §35): the set
-# of slots a positive body literal can bind is collected over the whole body
-# first, and every other literal is then measured against it.
+# written in, because the evaluator reorders literals: the set of slots a
+# positive body literal can bind is collected over the whole body first, and
+# the head, every negation and every comparison are then measured against it.
 
 function check_program(   r) {
 	for (r = 1; r <= rule_n; r++)
@@ -845,7 +849,7 @@ function check_program(   r) {
 }
 
 function check_rule_safety(r,   bound, i, k, kind) {
-	# posbound(r): every slot bound by a positive body literal (spec §32).
+	# Every slot bound by a positive body literal.
 	for (i = 1; i <= rule_body_n[r]; i++) {
 		if (rule_lit_kind[r, i] != 1)
 			continue
@@ -856,8 +860,8 @@ function check_rule_safety(r,   bound, i, k, kind) {
 	for (i = 1; i <= rule_body_n[r]; i++) {
 		kind = rule_lit_kind[r, i]
 		# Negation is membership on a ground tuple, so every argument
-		# must already be bound (spec §33, §50); = is a filter and not a
-		# binder in v1, so it needs no special case (spec §51).
+		# must already be bound; = is a filter and not a binder, so it
+		# needs no special case.
 		if (kind == 2)
 			check_bound_terms(r, i, bound,
 				"'not " predicate_label(rule_lit_pred[r, i]) "'")
@@ -883,8 +887,8 @@ function check_bound_terms(r, i, bound, what,   k, s) {
 	}
 }
 
-# Range restriction (spec §32).  A query's synthetic head carries its named
-# variables, which is the same rule seen from spec §14.
+# Range restriction: every head variable is bound by the body.  A query's
+# synthetic head carries its named variables, so queries get the same check.
 function check_head_safety(r, bound,   k, s, where) {
 	where = source_where(rule_line[r], rule_col[r])
 	for (k = 1; k <= rule_head_arity[r]; k++) {
@@ -902,8 +906,8 @@ function check_head_safety(r, bound,   k, s, where) {
 	}
 }
 
-# An ordering comparison is legal only where both operands resolve to numeric
-# (spec §13).  A symbol or string constant never will, so it is rejected here
+# An ordering comparison is legal only where both operands resolve to
+# numbers.  A symbol or string constant never will, so it is rejected here
 # rather than at run time, where the same operand would abort a query midway.
 function check_compare_types(r, i,   op, k, kind) {
 	op = rule_lit_op[r, i]
@@ -922,7 +926,7 @@ function check_compare_types(r, i,   op, k, kind) {
 
 # A predicate with neither facts nor rules is an empty relation rather than an
 # error, so that a program whose fact file is absent still runs; the warning
-# goes to stderr, leaving stdout clean for pipelines (PLAN.md section 6).
+# goes to stderr, leaving stdout clean for pipelines.
 # The memo is per predicate, so a name stays reported once however many
 # literals mention it.
 function check_undefined(   r, i, p) {
@@ -962,9 +966,9 @@ function var_display(r, s) {
 
 # ------------------------------------------------- dependencies and strata ---
 
-# One edge per head/body-literal pair (spec §36).  Facts have no body and a
-# query has no head, so neither contributes.  path[] starts as the union of
-# the two edge sets; stratify() closes it.
+# One edge per head/body-literal pair, positive or negative.  Facts have no
+# body and a query has no head, so neither contributes.  path[] starts as the
+# union of the two edge sets; stratify() closes it.
 function build_deps(   r, i, p, q, kind) {
 	for (r = 1; r <= rule_n; r++) {
 		if (rule_is_fact[r] || rule_is_query[r])
@@ -986,15 +990,17 @@ function build_deps(   r, i, p, q, kind) {
 
 # Recursion through negation is looked for directly, before any stratum is
 # assigned: a negative edge p -> q with q leading back to p is such a cycle by
-# definition (spec §38), and the lowest-numbered such p is a deterministic
-# predicate to name that is really on it.  (Waiting for the relaxation below
-# to overrun its bound would name whichever predicate crossed first, which is
-# as often one standing above the cycle as one on it.)
+# definition, and the lowest-numbered such p is a deterministic predicate to
+# name that is really on it.  (Relaxing until some stratum exceeds the number
+# of predicates would also detect the cycle, but would name whichever
+# predicate crossed first, which is as often one standing above the cycle as
+# one on it.)
 #
-# With that ruled out, the relaxation of spec §37 converges: raise stratum[p]
-# until every positive edge satisfies stratum[p] >= stratum[q] and every
-# negative one stratum[p] > stratum[q].  O(P^3) worst case, which is what §36
-# asks for, and it needs no SCC machinery.
+# With that ruled out, a simple relaxation converges: raise stratum[p] until
+# every positive edge satisfies stratum[p] >= stratum[q] and every negative
+# one stratum[p] > stratum[q].  That yields the minimal strata, in O(P^3)
+# worst case, which is fine for the number of predicates a program has and
+# needs no SCC machinery.
 function stratify(   p, q, s, changed) {
 	build_deps()
 	closure(path)
@@ -1025,8 +1031,8 @@ function stratify(   p, q, s, changed) {
 	for (p = 1; p <= pred_n; p++)
 		if (stratum[p] > max_stratum)
 			max_stratum = stratum[p]
-	# spec §48: a predicate that reaches itself.  Every cycle left is
-	# positive and so lies within one stratum, which makes the closure
+	# A recursive predicate is one that reaches itself.  Every cycle left
+	# is positive and so lies within one stratum, which makes the closure
 	# already taken the answer.
 	#
 	# This is reported by -v -v and is deliberately not what drives the
@@ -1053,7 +1059,7 @@ function closure(edge,   k, p, q) {
 }
 
 # Where a predicate is defined, so that a stratification error can point into
-# the source instead of naming the file alone (spec §38 shows either).
+# the source instead of naming the file alone.
 function pred_where(p,   r) {
 	for (r = 1; r <= rule_n; r++)
 		if (!rule_is_query[r] && rule_head_pred[r] == p)
@@ -1063,19 +1069,18 @@ function pred_where(p,   r) {
 
 # ------------------------------------------------------------ evaluation ---
 #
-# One stratum at a time, lowest first (spec §39).  The two engines share
-# eval_rule(), plan_rule(), join(), match_tuple() and emit_head(), and differ
-# only in which rules they re-run and in which relation one designated body
-# literal scans:
+# One stratum at a time, lowest first.  The two engines share eval_rule(),
+# plan_rule(), join(), match_tuple() and emit_head(), and differ only in which
+# rules they re-run and in which relation one designated body literal scans:
 #
 #	-D naive  re-runs every rule in the stratum against the full
-#		  relations until a pass derives nothing (spec §40).  Slow by
-#		  construction and kept as the correctness oracle of
-#		  spec §74 and §76.
+#		  relations until a pass derives nothing.  Slow by
+#		  construction and kept as the correctness oracle the test
+#		  suite checks the fast engine against.
 #	-D semi	  runs every rule once, then re-runs only the rules that read
 #		  a predicate this stratum derives, once per such body
-#		  position, with that position scanning the delta
-#		  (spec §41-§46).
+#		  position, with that position scanning the delta: the rows
+#		  the previous round added.
 #
 # Sharing the join is what keeps the two from drifting apart: a divergence
 # can only come from the rule and delta selection above, which is exactly
@@ -1090,7 +1095,7 @@ function evaluate(   s) {
 }
 
 # Rules are selected by the stratum of their head, and that is what freezes
-# the lower strata while this one runs (spec §39): no rule evaluated here can
+# the lower strata while this one runs: no rule evaluated here can
 # insert into a relation belonging anywhere else, so a negated predicate is
 # already complete by the time the stratum negating it is reached.
 function stratum_rule(r, s) {
@@ -1098,8 +1103,8 @@ function stratum_rule(r, s) {
 		stratum[rule_head_pred[r]] == s
 }
 
-# spec §40, and nothing more: re-run the lot until a pass adds nothing.
-# delta_active stays 0 for the whole run, so emit_head records nothing.
+# Re-run the lot until a pass adds nothing.  delta_active stays 0 for the
+# whole run, so emit_head records nothing.
 function eval_naive(s,   r) {
 	do {
 		eval_added = 0
@@ -1110,14 +1115,13 @@ function eval_naive(s,   r) {
 	} while (eval_added)
 }
 
-# spec §41-§46.  The seed pass runs every rule once against the full
-# relations; after it, any derivation still missing must use a tuple that
-# pass produced, so the fixpoint only has to re-run the rules that read a
-# predicate this stratum derives -- once per such position, with that
-# position scanning the delta.
+# The seed pass runs every rule once against the full relations; after it,
+# any derivation still missing must use a tuple that pass produced, so the
+# fixpoint only has to re-run the rules that read a predicate this stratum
+# derives -- once per such position, with that position scanning the delta.
 #
 # Seeding the delta with the whole relation rather than with what the seed
-# pass added (spec §43) re-derives some rows in the first round, which dedup
+# pass added re-derives some rows in the first round, which dedup
 # absorbs; in exchange it removes the class of bugs where a predicate holding
 # both facts and rules loses the derivations that start from its facts.
 #
@@ -1129,8 +1133,8 @@ function eval_semi(s,   r, i) {
 	for (r = 1; r <= rule_n; r++)
 		if (stratum_rule(r, s))
 			eval_rule(r, 0)
-	# spec §47: a stratum that reads nothing it derives is at its fixpoint
-	# after that one pass, so it never enters the delta loop at all.
+	# A stratum that reads nothing it derives is at its fixpoint after that
+	# one pass, so it never enters the delta loop at all.
 	if (delta_scanned(s) == 0)
 		return
 	delta_seed()
@@ -1189,10 +1193,10 @@ function delta_next_pos(r, s, from,   i, p) {
 	return 0
 }
 
-# spec §43: the first round scans the whole of every relation delta_scanned()
-# picked out, not just what the seed pass added -- so those relations are
-# staged as if a round had just derived them, and rotated in.  spec §42: a
-# delta holds tuple ids only, the rows themselves stay in the one tuple table.
+# The first round scans the whole of every relation delta_scanned() picked
+# out, not just what the seed pass added -- so those relations are staged as
+# if a round had just derived them, and rotated in.  A delta holds tuple ids
+# only; the rows themselves stay in the one tuple table.
 function delta_seed(   p, k) {
 	# next_t is already empty: delta_rotate() leaves it so, and nothing
 	# writes it outside a delta loop.
@@ -1234,9 +1238,9 @@ function eval_rule(r, d,   n) {
 }
 
 # Body order is chosen per rule invocation rather than once at parse time, so
-# the relation sizes it weighs are current (spec §35).  Order is a
-# correctness matter and not only a speed one: safety is decided over the
-# whole body regardless of the order it is written in (spec §33), so a source
+# the relation sizes it weighs are current.  Order is a correctness matter
+# and not only a speed one: safety is decided over the whole body regardless
+# of the order it is written in, so a source
 # may legally write "not penguin(X), bird(X)" and the negation has to end up
 # after the literal that binds X.
 function plan_rule(r, d,   n, np, i, best, best_bound, best_size, nb, size) {
@@ -1245,7 +1249,7 @@ function plan_rule(r, d,   n, np, i, best, best_bound, best_size, nb, size) {
 	array_clear(plan_bound)
 	np = 0
 	# A designated delta literal goes first: every derivation this run is
-	# allowed to make must use it (spec §45), and its relation is the
+	# allowed to make must use it, and its relation is the
 	# smallest one in play, so placing it anywhere else would only scan
 	# more rows to reach the same answers.
 	if (d > 0) {
@@ -1329,9 +1333,10 @@ function plan_bound_count(r, i,   k, n) {
 	return n
 }
 
-# Recursive nested-loop join over one binding environment (PLAN.md §8.1):
-# each level binds what its literal needs, recurses, then undoes exactly its
-# own bindings.  Depth is the body length, so it stays in single digits.
+# Recursive nested-loop join over one binding environment: each level binds
+# what its literal needs, recurses, then undoes exactly its own bindings.
+# Nothing is materialised between literals, so there are no binding tables to
+# allocate or copy.  Depth is the body length, so it stays small.
 function join(r, n, pos,   i, kind, p, c, k, t, use_delta) {
 	if (pos > n) {
 		if (rule_is_query[r])
@@ -1353,9 +1358,9 @@ function join(r, n, pos,   i, kind, p, c, k, t, use_delta) {
 		return
 	}
 	p = rule_lit_pred[r, i]
-	# The designated position scans only what the previous round derived
-	# (spec §44); every other position scans the whole relation, so each
-	# derivation this run makes uses at least one new tuple (spec §45).
+	# The designated position scans only what the previous round derived;
+	# every other position scans the whole relation, so each derivation
+	# this run makes uses at least one new tuple.
 	#
 	# A delta is fixed for the length of a round -- rows derived now go to
 	# the next one -- but a full relation is not, so its size is read once
@@ -1363,9 +1368,9 @@ function join(r, n, pos,   i, kind, p, c, k, t, use_delta) {
 	# is scanning, and rows added while the scan runs are left to the next
 	# round, which is what bounds the loop.  Rows added earlier in the
 	# same round, by another rule or by an outer level of this one, are in
-	# and are scanned -- spec §40 says "evaluate rule against all facts",
+	# and are scanned: a rule runs against the relations as they stand,
 	# not against a frozen snapshot, so the iteration count depends on the
-	# order the rules are written in.
+	# order the rules are written in, though the result does not.
 	use_delta = (i == delta_lit)
 	c = use_delta ? delta_n[p] : pred_tuple_count[p]
 	for (k = 1; k <= c; k++) {
@@ -1379,8 +1384,8 @@ function join(r, n, pos,   i, kind, p, c, k, t, use_delta) {
 	}
 }
 
-# spec §30: an unbound argument takes the tuple's value, a bound one or a
-# constant must equal it.  No general unification.  Which slots this level
+# An unbound argument takes the tuple's value, a bound one or a constant must
+# equal it; no general unification is needed.  Which slots this level
 # bound is recorded per depth so that unbind() can revert just those.
 function match_tuple(r, i, t, pos,   k, s, v) {
 	bound_n[pos] = 0
@@ -1413,9 +1418,8 @@ function unbind(pos,   j) {
 	bound_n[pos] = 0
 }
 
-# Every argument is bound -- spec §33 is checked statically -- so negation is
-# one membership test on the candidate key and never scans a relation
-# (spec §49).
+# Every argument is bound -- the safety check guarantees it -- so negation is
+# one membership test on the candidate key and never scans a relation.
 function eval_negation(r, i,   k, n, argv) {
 	n = rule_lit_arity[r, i]
 	for (k = 1; k <= n; k++)
@@ -1424,10 +1428,10 @@ function eval_negation(r, i,   k, n, argv) {
 }
 
 # = and != compare encoded values, so foo, "foo" and 42 are three distinct
-# values (spec §26).  Ordering is numeric only (spec §13); a non-numeric
-# operand here arrived through a variable, which the static check cannot see,
-# so it is a located run-time error rather than a silent failure that would
-# be indistinguishable from "no such fact" (PLAN.md §14.7).
+# values.  Ordering is numeric only; a non-numeric operand here arrived
+# through a variable, which the static check cannot see, so it is a located
+# run-time error rather than a silent failure that would be
+# indistinguishable from "no such fact".
 function eval_compare(r, i,   op, a, b) {
 	a = lit_value(r, i, 1)
 	b = lit_value(r, i, 2)
@@ -1474,7 +1478,7 @@ function head_value(r, k) {
 }
 
 # The head of a rule whose body succeeded.  Deduplication is the tuple
-# store's (spec §25), so a re-derived row costs one hash lookup and does not
+# store's, so a re-derived row costs one hash lookup and does not
 # count as progress.
 function emit_head(r,   p, n, k, t, argv) {
 	p = rule_head_pred[r]
@@ -1497,15 +1501,15 @@ function emit_head(r,   p, n, k, t, argv) {
 
 # --------------------------------------------------------------- queries ---
 #
-# Queries run after the fixpoint, in source order with any -q queries last
-# (spec §52-54): a query never restricts what was materialised, there are no
-# magic sets.  A query joins exactly like a rule; only the leaf differs, in
-# emitting a row instead of inserting a tuple.
+# Queries run after the fixpoint, in source order with any -q queries last.
+# A query never restricts what is computed -- every relation is materialised
+# in full first, with no magic-sets rewriting.  A query joins exactly like a
+# rule; only the leaf differs, in emitting a row instead of inserting a tuple.
 
 function run_queries(   q) {
 	for (q = 1; q <= query_n; q++) {
 		# A blank line between blocks, so several results stay
-		# distinguishable (PLAN.md section 9).
+		# distinguishable.
 		if (q > 1)
 			query_print("")
 		query_run(query_rule[q])
@@ -1514,10 +1518,10 @@ function run_queries(   q) {
 
 # Everything a query prints goes through one of these two, because -n and a
 # dump run have to suppress the lot.  Rows come out in the order the
-# evaluator reached them, which spec §63 leaves unspecified and which the two
-# engines genuinely differ on -- so letting them into a dump would make two
+# evaluator reached them, which is unspecified and which the two engines
+# genuinely differ on -- so letting them into a dump would make two
 # engines that agree on the whole model look as though they disagreed.  The
-# queries still run under the hook: they cannot change a relation, but a
+# queries still run under AWKLOG_DUMP: they cannot change a relation, but a
 # comparison against a non-numeric operand still has to fail where it would
 # fail without it.
 #
@@ -1550,17 +1554,18 @@ function row_print(line) {
 		# The rows reach the terminal through sort's stdout and not
 		# through awk's, so anything already printed -- the blank line
 		# that separates this block from the last one, above all -- has
-		# to be pushed out first or it could land after them (PLAN.md
-		# section 13).
+		# to be pushed out first or it could land after them.  fflush()
+		# is the one function here that POSIX adopted only in its 2024
+		# edition; every awk in practical use has long had it.
 		fflush()
 		sort_open = 1
 	}
 	print line | SORTCMD
 }
 
-# Each query is sorted on its own rather than the whole output at once
-# (PLAN.md §14.3), so closing the pipe here is what keeps one block's rows
-# from mixing with the next one's.
+# Each query is sorted on its own rather than the whole output at once, so
+# closing the pipe here is what keeps one block's rows from mixing with the
+# next one's.
 function rows_flush() {
 	if (sort_open) {
 		sort_open = 0
@@ -1570,8 +1575,8 @@ function rows_flush() {
 
 # Rows leave through sort's stdout, so a sort that could not run takes them
 # with it and awklog would otherwise exit 0 having printed nothing, which a
-# pipeline reads as "no rows matched".  Only two of the four awks in the
-# matrix report it -- mawk and gawk return 127 from close() on a failed pipe,
+# pipeline reads as "no rows matched".  Only two of the four tested awks
+# report it -- mawk and gawk return 127 from close() on a failed pipe,
 # BWK awk and gawk --posix return 0 -- but all four return 0 on success, so
 # the check never fires wrongly and catches the failure where it can.
 #
@@ -1613,13 +1618,13 @@ function query_run(r,   n) {
 	join_stop = 0
 	# No columns means a ground query -- including one whose only
 	# variables are anonymous, since those are never projected -- and a
-	# ground query answers true or false (spec §15).
+	# ground query answers true or false.
 	if (query_ground)
 		row_print(query_rows > 0 ? "true" : "false")
 	rows_flush()
 }
 
-# Columns are the named variables in order of first appearance (spec §14).
+# Columns are the named variables in order of first appearance.
 # Two bindings of the anonymous variables can project one row, so rows are
 # deduplicated on their encoded values rather than on the printed text: a
 # symbol and a string can print alike in text format and are still distinct.
@@ -1644,23 +1649,21 @@ function query_emit(r,   k, v, key, row) {
 
 # ---------------------------------------------------------------- output ---
 #
-# Three formats, one column at a time (spec §60-62):
+# Three formats, one column at a time.  README.md documents them as stable.
 #
 #	text	symbols and numbers bare, a string bare unless it is empty or
 #		carries whitespace or a quote, in which case it is quoted with
-#		the escapes of spec §7.2.  This is the only format that keeps
-#		the value's type visible, since it is the only one whose reader
-#		is a person.
+#		the escapes of the source language, so it reads back.
 #	csv	RFC 4180: a quote is doubled, and a field is quoted when it
 #		holds a comma, a quote, CR or LF, or has a leading or trailing
-#		space.  The type tag is dropped, as it is in text and tsv: no
-#		format here spells the symbol foo apart from the string "foo",
-#		since text quotes a string only when its contents force it.
-#		Only .dump does, and it is not an output format (spec §26
-#		governs what the engine compares, not what a row looks like).
-#	tsv	escaped, never quoted, which spec §62 allows as long as it is
-#		documented: backslash, tab, newline and CR become \\, \t, \n
-#		and \r, so every row is one line and every column one field.
+#		space.
+#	tsv	escaped, never quoted: backslash, tab, newline and CR become
+#		\\, \t, \n and \r, so every row is one line and every column
+#		one field.
+#
+# All three drop the type tag: none spells the symbol foo apart from the
+# string "foo", since text quotes a string only when its contents force it.
+# Only the relation dump keeps types, and it is not an output format.
 
 function format_field(v) {
 	if (opt_format == "csv")
@@ -1718,9 +1721,9 @@ function tsv_escape(s) {
 	return escape_text(s, 0)
 }
 
-# The escapes of spec §7.2, built with a character loop rather than gsub():
-# POSIX leaves a backslash in a gsub() replacement undefined outside \& and
-# \\ (PLAN.md section 13).
+# The source language's string escapes, built with a character loop rather
+# than gsub(): POSIX leaves a backslash in a gsub() replacement undefined
+# outside \& and \\.
 function escape_text(s, quotes,   out, i, c) {
 	out = ""
 	for (i = 1; ; i++) {
@@ -1764,11 +1767,11 @@ function csv_quote(s) {
 # ------------------------------------------------------------------ dump ---
 #
 # Every relation, whole, in an order that does not depend on the engine --
-# the differential test of spec §76 compares this between -D naive and -D
-# semi, and the two insert their tuples in different orders by construction.
-# Rows therefore go through sort(1) rather than out as stored: it is the same
-# mechanism -s uses (PLAN.md §14.3) and the only sort available without
-# asort().  A predicate's own line carries its size, so that a relation the
+# the test suite compares this between -D naive and -D semi, and the two
+# insert their tuples in different orders by construction.  Rows therefore go
+# through sort(1) rather than out as stored: it is the same mechanism -s uses
+# and the only sort available without asort().  A predicate's own line
+# carries its size, so that a relation the
 # other engine left empty is a difference and not a silence.
 #
 # A value is printed with its type letter and always quoted, so that the
@@ -1782,8 +1785,8 @@ function dump_relations(   p, k, a, t, line) {
 		return
 	# The rows reach the terminal through sort's stdout and not through
 	# awk's, so anything already printed has to be pushed out first or it
-	# could land after them.  All four target awks happen to flush at the
-	# pipe themselves, but only fflush() says so (PLAN.md section 13).
+	# could land after them.  All four tested awks happen to flush at the
+	# pipe themselves, but only fflush() makes that a guarantee.
 	fflush()
 	for (p = 1; p <= pred_n; p++) {
 		print predicate_label(p) "\t#\t" pred_tuple_count[p] | SORTCMD

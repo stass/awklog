@@ -1,5 +1,5 @@
-% join() recurses once per body literal (PLAN.md section 15), so a long body
-% is the depth test: twelve literals, past anything idiomatic.
+% join() recurses once per body literal, so a long body is the depth test:
+% twelve literals, past anything idiomatic.
 p(1).
 p(2).
 q(a).

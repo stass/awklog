@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# awklog test harness (PLAN.md section 12).
+# awklog test harness.
 #
 #	tests/run.sh [name ...]
 #
@@ -9,7 +9,7 @@
 #	NAME.dl		the program (may contain embedded queries)
 #	NAME.args	extra CLI arguments, one line	(default: none)
 #	NAME.direct	present to run awk -f awklog.awk instead of the
-#			wrapper (spec §58); NAME.args then holds -v
+#			wrapper; NAME.args then holds -v
 #			awklog_* assignments rather than options
 #	NAME.nodump	present when the case legitimately dumps no relations
 #	NAME.nodiff	present to skip the differential run: NAME.args ends
@@ -21,8 +21,8 @@
 # Every case runs under -D semi and -D naive, under every awk found, and both
 # engines must produce NAME.out.  Each case is then run a third time per awk
 # with AWKLOG_DUMP=1, which prints every relation, and the two engines' dumps
-# must be byte-identical: spec §76 compares the whole model, not only the
-# rows the case's queries happen to ask for.
+# must be byte-identical: that compares the whole model, not only the rows
+# the case's queries happen to ask for.
 #
 # A case NAME.dl may be a symlink into examples/, so that every command an
 # example documents is pinned by a case and the two cannot drift apart.
@@ -130,14 +130,13 @@ run_case() {
 	base=${name##*/}
 
 	# No arguments by default: a case that prints rows pins the order the
-	# evaluator produces them in.  Since M5 that order is per engine --
-	# spec §63 leaves it unspecified and the two engines reach rows
-	# differently -- so NAME.out has to be an order both agree on.  A case
-	# that grows past the point where they do must either pin one engine
-	# in NAME.args, the way eval-semi-scans and eval-naive-scans do, or
-	# pass -s, which since M6 sorts each query's rows and leaves the two
-	# engines nothing to disagree about.  What they must always agree on
-	# is the model, and that is diff_case's job, not this one.
+	# evaluator produces them in.  That order is unspecified and differs
+	# between the engines, so NAME.out has to be an order both agree on.
+	# A case where they do not must either pin one engine in NAME.args,
+	# the way eval-semi-scans and eval-naive-scans do, or pass -s, which
+	# sorts each query's rows and leaves the two engines nothing to
+	# disagree about.  What they must always agree on is the model, and
+	# that is diff_case's job, not this one.
 	args=
 	[ -f "$name.args" ] && args=$(cat "$name.args")
 
@@ -181,7 +180,7 @@ run_case() {
 	return 0
 }
 
-# Differential check (spec §76): the same program through both engines must
+# Differential check: the same program through both engines must
 # leave every relation identical.  AWKLOG_DUMP prints those relations, sorted,
 # and suppresses the queries' own rows, whose order is an engine artefact and
 # would otherwise make two agreeing engines look like they diverged.

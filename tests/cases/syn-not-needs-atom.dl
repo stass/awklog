@@ -1,2 +1,2 @@
-% "not" applies to an atom, never to a comparison (spec §17).
+% "not" applies to an atom, never to a comparison.
 ready(X) :- todo(X), not X < 3.

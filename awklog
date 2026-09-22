@@ -5,7 +5,7 @@
 # This wrapper does all command-line parsing (POSIX getopts) and hands the
 # settings to awklog.awk through the environment rather than through "awk -v",
 # because -v performs escape-sequence processing on the value and would corrupt
-# a query containing \n inside a string literal (PLAN.md section 10).
+# a query containing \n inside a string literal.
 #
 # Exit status: 0 success, 1 program error, 2 usage error.
 

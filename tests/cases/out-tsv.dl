@@ -1,5 +1,5 @@
-% tsv escapes instead of quoting, which spec §62 allows as long as the format
-% is documented: backslash, tab, newline and CR become \\, \t, \n and \r, so
+% tsv escapes instead of quoting, and the escaping is part of its documented
+% format: backslash, tab, newline and CR become \\, \t, \n and \r, so
 % every row is one line and every column one field.  A comma and a quote mean
 % nothing to tsv and go out untouched.
 t(1, "back\\slash").

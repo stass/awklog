@@ -1,10 +1,10 @@
-% The transitive closure of an eight-node chain: the program PLAN.md
-% section 11 measures the two engines on.  Its twin, eval-naive-scans, is the
-% same source under -D naive, and both pin the counters -v prints, so a
+% The transitive closure of an eight-node chain, on which the two engines'
+% work is measured.  Its twin, eval-naive-scans, is the same source under
+% -D naive, and both pin the counters -v prints, so a
 % change in either engine's work fails a case instead of passing quietly.
 %
 % Each engine derives the same 28 path rows.  Semi-naive reads 287 tuples
-% against naive's 398, which is the reduction spec §41 exists for.
+% against naive's 398, which is the saving semi-naive evaluation exists for.
 % Iterations move the other way -- 7 against 3 -- and that is not a
 % regression: a naive pass is not one step of the closure, because join()
 % re-reads the inner literal's relation size for every outer row and so picks

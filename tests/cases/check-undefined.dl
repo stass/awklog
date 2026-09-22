@@ -1,5 +1,5 @@
 % A predicate with neither facts nor rules is an empty relation plus a
-% warning, not an error (PLAN.md section 6); stdout stays clean.
+% warning, not an error; stdout stays clean.
 q(1).
 p(X) :- q(X), not r(X).
 s(X) :- q(X), r(X).

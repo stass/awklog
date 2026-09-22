@@ -1,5 +1,4 @@
-# gen.awk -- random safe, stratified Datalog programs for differential testing
-# (spec §77, PLAN.md section 12).
+# gen.awk -- random safe, stratified Datalog programs for differential testing.
 #
 #	awk -v seed=N -f tests/gen.awk > prog.dl
 #
@@ -18,19 +17,19 @@
 #	  recursion and rules with two recursive literals come from -- and
 #	  negates only base predicates or derived ones of level < L.  Every
 #	  cycle therefore stays within one level and is positive, so the
-#	  program is stratifiable (spec §37);
+#	  program is stratifiable;
 #	- sometimes facts for a derived predicate as well, the shape that
-#	  seeding deltas with whole relations exists for (spec §43);
+#	  seeding deltas with whole relations exists for;
 #	- a head, negated literals and comparisons drawn only from variables
 #	  some positive literal binds, or from constants, so every rule is
-#	  safe (spec §32-34);
+#	  safe;
 #	- body literals in shuffled order, so a negation or a comparison is
-#	  often written before the literal that binds it (spec §33, §35);
+#	  often written before the literal that binds it;
 #	- ordering comparisons only in programs whose every constant is a
 #	  number, since elsewhere a variable may be bound to a symbol and the
 #	  program would stop on a run-time type error, which both engines
 #	  would reach alike and so prove nothing.  Mixed programs use = and !=,
-#	  which is where foo, "foo" and 42 have to stay distinct (spec §26).
+#	  which is where foo, "foo" and 42 have to stay distinct.
 #
 # The first line is a comment summarising what the program contains, which
 # tests/fuzz.sh tallies so that a run can show it exercised something.

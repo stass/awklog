@@ -1,5 +1,5 @@
-% All six comparison operators (spec §13) against the same relation, then the
-% type-distinct equality of spec §26: foo, "foo" and 42 are three different
+% All six comparison operators against the same relation, then the
+% type-distinct equality: foo, "foo" and 42 are three different
 % values, so each of the last three queries matches exactly one of them --
 % if the types were conflated, the first two would print two rows each.
 size(a, 1).

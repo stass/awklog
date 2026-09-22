@@ -1,4 +1,4 @@
-% Every grammar form of spec §17 must parse (milestone M1).
+% Every form of the grammar must parse.
 
 % facts: zero-arity, symbols, strings with escapes, negative and large integers
 initialized.
@@ -21,7 +21,7 @@ ready(X) :- todo(X), not blocked(X).
 cmp(X) :- size(X, N), N = 5, N != 3, N < 9, N <= 9, N > 1, N >= 0.
 mixed(X) :- size(X, N), foo = bar, "s" != 7, N >= -1.
 
-% anonymous variables: each _ is a distinct variable (spec §9)
+% anonymous variables: each _ is a distinct variable
 anon(X) :- pair(_, _), edge(X, _).
 
 % queries: ground, single, multi-literal, zero-arity

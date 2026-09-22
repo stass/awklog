@@ -1,3 +1,3 @@
-% String ordering is deliberately omitted (spec §13).
+% There is no string ordering: <, <=, > and >= compare integers only.
 q(1).
 p(X) :- q(X), "a" >= X.

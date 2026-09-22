@@ -1,5 +1,5 @@
 % The naive half of the pair described in eval-semi-scans.dl: the same
-% eight-node chain, evaluated by the oracle of spec §40 and §74.  Keeping the
+% eight-node chain, evaluated by the naive reference engine.  Keeping the
 % two as separate cases is what lets each pin its own counters: the harness
 % runs every case under both engines against one expected stderr.
 edge(1, 2).

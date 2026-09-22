@@ -1,5 +1,5 @@
 % Recursion around a cycle terminates only because re-derived rows are
-% absorbed by the tuple store (spec §25); a is reachable from itself.
+% absorbed by the tuple store; a is reachable from itself.
 edge(a, b).
 edge(b, c).
 edge(c, a).

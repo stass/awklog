@@ -1,4 +1,4 @@
-% csv is RFC 4180 (spec §61): a quote is doubled, and a field is quoted when
+% csv is RFC 4180: a quote is doubled, and a field is quoted when
 % it holds a comma, a quote, CR or LF, or has a leading or trailing space
 % (rows 6 and 10: either one alone is enough).
 % The type tag does not survive -- csv has no types, so row 7's symbol and

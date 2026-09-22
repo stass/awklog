@@ -1,4 +1,4 @@
-% spec §78: the project tracker.  planner is the only card that is todo and
+% A project tracker.  planner is the only card that is todo and
 % depends on nothing unfinished.
 card(parser).
 card(planner).

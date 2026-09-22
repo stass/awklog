@@ -1,6 +1,6 @@
-% Safety is order-independent (spec §33): a negated literal written before the
+% Safety does not depend on body order: a negated literal written before the
 % literal that binds its variable, and a comparison written before its binder,
-% are both safe because the evaluator reorders the body (spec §35).
+% are both safe because the evaluator reorders the body.
 todo(a).
 blocked(b).
 size(a, 200).

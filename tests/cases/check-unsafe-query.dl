@@ -1,5 +1,5 @@
-% A query is checked as a rule whose head carries its named variables
-% (spec §14), and says so in the diagnostic.
+% A query is checked as a rule whose head carries its named variables, and
+% the diagnostic says so.
 q(1).
 r(1).
 q(X), not r(Y)?
