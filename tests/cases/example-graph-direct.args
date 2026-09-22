@@ -1,0 +1,1 @@
+-v awklog_query=path(a,f)? -v awklog_verbose=1

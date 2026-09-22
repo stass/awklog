@@ -1,0 +1,63 @@
+% policy.dl -- access control over nested groups, with a policy check.
+%
+%	awklog -c examples/policy.dl
+%	awklog examples/policy.dl
+%	awklog -q 'can(alice, write, repo)?' examples/policy.dl
+%
+% Recursive group membership, grants and explicit denials, numeric
+% clearance levels, and a zero-arity flag.
+
+member(alice, engineering).
+member(dave, interns).
+member(carol, finance).
+member(bob, contractors).
+
+% Groups nest: a member of a subgroup is a member of every group above it.
+subgroup(interns, engineering).
+subgroup(engineering, staff).
+subgroup(finance, staff).
+
+in_group(U, G) :- member(U, G).
+in_group(U, G) :- in_group(U, S), subgroup(S, G).
+
+grant(staff, read, wiki).
+grant(engineering, read, repo).
+grant(engineering, write, repo).
+grant(finance, read, payroll).
+grant(contractors, read, repo).
+
+% Interns read the code; they do not push to it.
+deny(dave, write, repo).
+
+% Each resource has a classification, each user a clearance, and a user
+% may touch only what their clearance covers, whatever they are granted.
+classification(wiki, 1).
+classification(repo, 2).
+classification(payroll, 3).
+
+clearance(alice, 2).
+clearance(dave, 2).
+clearance(carol, 3).
+clearance(bob, 1).
+
+% A change freeze is in force: nothing is written while this fact holds.
+% Delete the line to lift it; awklog will then warn that change_freeze/0 is
+% undefined and treat it as empty, which is exactly "no freeze".
+change_freeze.
+
+granted(U, A, R) :- in_group(U, G), grant(G, A, R).
+cleared(U, R) :- clearance(U, C), classification(R, L), C >= L.
+allowed(U, A, R) :- granted(U, A, R), cleared(U, R), not deny(U, A, R).
+
+can(U, read, R) :- allowed(U, read, R).
+can(U, write, R) :- allowed(U, write, R), not change_freeze.
+
+% Policy check: a grant that the user's clearance can never honour.  Any
+% row here is a finding -- a grant to remove or a clearance to raise.
+over_granted(U, R) :- granted(U, _, R), not cleared(U, R).
+
+% Who can do what?
+can(U, A, R)?
+
+% Findings.
+over_granted(U, R)?

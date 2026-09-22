@@ -1,0 +1,7 @@
+planner	Join planner
+
+docs	Write the README	1
+lexer	Tokenise source	30
+parser	Rewrite parser	20
+planner	Join planner	10
+storage	Tuple storage	5

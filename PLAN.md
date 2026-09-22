@@ -191,6 +191,31 @@ evaluation (445 against 240), parser (267 against 180), lexer (212 against
 130) and checks (126 against 100); M8 has the docs milestone's worth of code
 left to add and all of that to take out.
 
+**Actuals at M7** (README, the three examples, the portability sweep): no
+engine code, so `awklog.awk` stays at 1,900 lines and M8 inherits the whole
+700-line overrun. The docs milestone cost nothing in the engine because
+nothing it documented needed changing, only describing.
+
+What M7 did find was in the tooling around the engine. When M7 began, mawk
+and gawk were no longer on the machine. `make test` still passed: 222 checks
+under BWK awk alone, against 888 at M6. The summary line reads the same with
+one awk as with four, so a sweep that had shrunk to one awk looked no
+different from a full one. The harness now names every awk it could not
+find, and `make sweep` refuses to run without all four (§12, §15). Writing the
+Install section turned up a second problem: `make install PREFIX=/opt`
+produced a wrapper still pointing at `/usr/local/libexec`, which exited 2
+with "cannot find awklog.awk". `make install` now writes its own
+`LIBEXECDIR` into the installed wrapper, as §10 always said it should.
+
+The sweep also found the one place where the four awks disagree on
+something a user can do: a file operand that is not readable input. A
+missing file exits 2 under all four, but with four different messages. A
+directory is worse: BWK awk reads it as empty and exits 0, gawk skips it
+with a warning and exits 0, and mawk and `gawk --posix` exit 2. The wrapper
+now refuses both before awk runs, with `awklog: FILE: cannot open` or `is a
+directory` and status 2 (`cli-missing-file`, `cli-directory`). Direct `awk
+-f` use keeps each awk's own behaviour, and the README says so.
+
 ---
 
 ## 4. Data representation
@@ -578,9 +603,11 @@ exist before the semi-naive one (M5) so M5 has an oracle from day one.
 `tests/run.sh` (POSIX sh, no bashisms) iterates `tests/cases/*.dl`:
 
 ```text
-NAME.dl        program (may contain embedded queries)
+NAME.dl        program (may contain embedded queries); may be a symlink into examples/
 NAME.args      optional extra CLI args (default: none)
+NAME.direct    present to run `awk -f awklog.awk` with NAME.args as -v assignments
 NAME.nodump    present when the case legitimately dumps no relations
+NAME.nodiff    present when NAME.args ends in an operand, so the differential run is skipped
 NAME.out       expected stdout   (byte-exact)
 NAME.err       optional expected stderr, matched as a substring/pattern
 NAME.status    optional expected exit status (default 0)
@@ -619,6 +646,12 @@ case with no relations to dump — `empty-program`, which exists because
 closing a `sort` pipe that nothing opened would report a failure that never
 happened — so that the "exited 0 but dumped nothing" guard does not fire on
 it.
+
+Since M7, the `example-*` cases are symlinks to `examples/*.dl`, one for each
+command an example's header lists. An example and its documented output
+therefore cannot drift apart without the suite noticing. `example-graph-direct`
+is the one `NAME.direct` case: it runs the interpreter the way spec §58 does,
+bypassing the wrapper, and pins that `-v awklog_*` assignments reach it.
 
 Coverage checklist, one case minimum each (spec §75): simple facts; single rule;
 multiple rules; recursive path; cyclic graph recursion; mutual recursion;
@@ -729,6 +762,7 @@ every run and M7 is not blocked on tooling.
 | `sort(1)` missing or failing under `-s` | rows leave through its stdout, so a failed pipe would print nothing and exit 0, which a pipeline reads as "no rows matched". `rows_flush()` and `dump_relations()` check `close()` and die instead. Measured, only mawk and gawk report a failed pipe there (127); BWK awk and `gawk --posix` return 0 — but all four return 0 on success, so the check never fires wrongly and catches it where it can. The same measurement is why the check may only be applied to a pipe that was written to: `close()` of a command never opened returns −1 on all four, and a program with no predicates opens none, so `dump_relations()` returns before the pipe (`empty-program`). A status meaning SIGPIPE is exempt as well: `awklog -s f.dl \| head` kills `sort` once the reader has what it wants, and mawk and gawk report that here as 269, which taken for a failure would make an ordinary pipeline exit 1 — intermittently, since it depends on which end stops first |
 | `-s` and a csv value containing a newline | RFC 4180 spells such a value across lines, and `sort(1)` sorts lines, so the two cannot both be honoured. Escaping the newline would stop being RFC 4180, and refusing `-s` for csv outright would cost every result that holds none, which is nearly all of them — so the combination is allowed and `row_print()` warns once, on the first row it actually damages. `out-csv-sort` pins the warning and the damage; tsv, which escapes, has no such hole |
 | A portability break slipping in between sweeps | all four awks are installed locally; `tests/run.sh` runs every case under each of them, so the sweep is continuous rather than an M7 event |
+| The sweep shrinking without anyone noticing | this happened at M7: mawk and gawk had left the machine and `make test` passed under BWK awk alone. `tests/run.sh` now names every awk it could not find, on stderr, and `make sweep` (`SWEEP=1`) exits 2 unless all four are present |
 | Deep recursion in `join` on a long rule body | depth = body length; document a practical limit and test a 12-literal body |
 | BWK awk string ops are O(length) — `substr` and passing a string to a function both cost time proportional to the whole string, at any offset (mawk and gawk are O(1)) | inherent to that awk, so any lexer is quadratic in the length of one line: 20,000 facts cost 0.5 s spread one per line but 8.3 s on a single line. Irrelevant for sources with one statement per line; documented rather than worked around, since avoiding the copy recovers only 28% and smears `src_text[lex_i]` through every call site |
 

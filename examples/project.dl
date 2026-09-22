@@ -1,0 +1,55 @@
+% project.dl -- a small task tracker (spec §78, extended).
+%
+%	awklog examples/project.dl
+%	awklog -q 'blocked_by(storage, Y)?' examples/project.dl
+%	awklog -s -F tsv -q 'card(C), title(C, T), priority(C, P)?' examples/project.dl
+%
+% Strings, integers and an ordering comparison, a transitive dependency
+% relation, and a rule that negates a derived predicate.
+
+card(lexer).
+card(parser).
+card(planner).
+card(storage).
+card(docs).
+
+title(lexer, "Tokenise source").
+title(parser, "Rewrite parser").
+title(planner, "Join planner").
+title(storage, "Tuple storage").
+title(docs, "Write the README").
+
+status(lexer, done).
+status(parser, done).
+status(planner, todo).
+status(storage, todo).
+status(docs, todo).
+
+priority(lexer, 30).
+priority(parser, 20).
+priority(planner, 10).
+priority(storage, 5).
+priority(docs, 1).
+
+depends(parser, lexer).
+depends(planner, parser).
+depends(storage, planner).
+depends(docs, storage).
+
+% Everything a card needs, directly or through another card.
+requires(X, Y) :- depends(X, Y).
+requires(X, Z) :- depends(X, Y), requires(Y, Z).
+
+unfinished(X) :- status(X, todo).
+
+% A card is blocked by every unfinished card it requires.
+blocked_by(X, Y) :- requires(X, Y), unfinished(Y).
+blocked(X) :- blocked_by(X, _).
+
+% Ready: still to do, and nothing in the way.
+ready(X) :- unfinished(X), not blocked(X).
+
+% Worth doing next: ready, and priority at least 10.
+next(X, T) :- ready(X), priority(X, P), P >= 10, title(X, T).
+
+next(X, T)?

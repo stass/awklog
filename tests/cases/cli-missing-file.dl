@@ -1,0 +1,4 @@
+% An operand the wrapper cannot read is refused before awk sees it: each awk
+% reports a missing file its own way, so the wrapper says it once, with
+% status 2 (spec §65).  This program itself is fine.
+p(a).

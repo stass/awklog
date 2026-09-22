@@ -1,0 +1,37 @@
+% graph.dl -- reachability over a small directed graph.
+%
+%	awklog examples/graph.dl
+%	awklog -s -q 'path(X, Y)?' examples/graph.dl
+%	awklog -s -F csv -q 'unreachable(X, Y)?' examples/graph.dl
+%
+% Recursion, a cycle that must still terminate, and one stratum of negation.
+
+edge(a, b).
+edge(b, c).
+edge(c, d).
+edge(d, b).		% closes the cycle b -> c -> d -> b
+edge(e, f).		% a second component, disconnected from the first
+
+node(X) :- edge(X, _).
+node(Y) :- edge(_, Y).
+
+% path is the transitive closure of edge.  The cycle is harmless: a row is
+% derived once, and evaluation stops when a round derives nothing new.
+path(X, Y) :- edge(X, Y).
+path(X, Z) :- edge(X, Y), path(Y, Z).
+
+% A node on a cycle reaches itself.
+cyclic(X) :- path(X, X).
+
+% Ordered pairs of distinct nodes with no path between them.  path is
+% complete before this rule runs, which is what makes the negation sound.
+unreachable(X, Y) :- node(X), node(Y), X != Y, not path(X, Y).
+
+% Where can we get to from a?
+path(a, X)?
+
+% Which nodes lie on a cycle?
+cyclic(X)?
+
+% Is f reachable from a?  A query with no variables answers true or false.
+path(a, f)?

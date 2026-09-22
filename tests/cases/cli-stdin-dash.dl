@@ -1,0 +1,4 @@
+% "-" names standard input and is exempt from the wrapper's readability
+% check; the harness feeds /dev/null, so the program is this file alone.
+p(a).
+p(X)?

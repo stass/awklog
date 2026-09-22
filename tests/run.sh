@@ -8,7 +8,12 @@
 #
 #	NAME.dl		the program (may contain embedded queries)
 #	NAME.args	extra CLI arguments, one line	(default: none)
+#	NAME.direct	present to run awk -f awklog.awk instead of the
+#			wrapper (spec §58); NAME.args then holds -v
+#			awklog_* assignments rather than options
 #	NAME.nodump	present when the case legitimately dumps no relations
+#	NAME.nodiff	present to skip the differential run: NAME.args ends
+#			in an operand, which the -D it appends cannot follow
 #	NAME.out	expected stdout, byte-exact	(default: empty)
 #	NAME.err	expected stderr, one pattern per line, each must match
 #	NAME.status	expected exit status		(default: 0)
@@ -19,9 +24,14 @@
 # must be byte-identical: spec §76 compares the whole model, not only the
 # rows the case's queries happen to ask for.
 #
+# A case NAME.dl may be a symlink into examples/, so that every command an
+# example documents is pinned by a case and the two cannot drift apart.
+#
 # Environment:
 #	AWKS	newline-separated awk commands to test (default: those found)
 #	AWKLOG	wrapper to test (default: the one beside this script)
+#	SWEEP	set to 1 to fail unless all four awks of the portability
+#		matrix are found (make sweep)
 #	VERBOSE	set to 1 to print every passing case
 
 LC_ALL=C
@@ -36,23 +46,66 @@ AWKLOG=${AWKLOG:-$root/awklog}
 AWKLOG_AWK=${AWKLOG_AWK:-$root/awklog.awk}
 export AWKLOG_AWK
 
+# The wrapper overwrites every setting it passes, but a direct case reaches
+# awklog.awk without it, so a stray AWKLOG_QUIET in the caller's shell would
+# otherwise silence that case's output.
+unset AWKLOG_CHECK AWKLOG_DUMP AWKLOG_FORMAT AWKLOG_MODE AWKLOG_QUERY \
+	AWKLOG_QUIET AWKLOG_SORT AWKLOG_STDERR AWKLOG_VERBOSE
+
 if [ ! -x "$AWKLOG" ]; then
 	echo "run.sh: $AWKLOG is not executable" >&2
 	exit 2
 fi
 
 # Which awks to exercise.  gawk is run twice: once natively, once in POSIX mode.
-if [ -z "${AWKS:-}" ]; then
-	AWKS=$(
-		for a in awk mawk gawk; do
-			if command -v "$a" >/dev/null 2>&1; then
-				echo "$a"
-			fi
-		done
-		if command -v gawk >/dev/null 2>&1; then
-			echo "gawk --posix"
+#
+# An awk that is not installed is skipped, so that the suite still runs on a
+# host with only one of them -- but it is named, because the summary line
+# alone reads the same with one awk as with four, and a portability sweep
+# that has quietly shrunk to one awk is no sweep at all.  SWEEP=1 makes the
+# shortfall an error.
+#
+# BWK awk is recognised by its "awk version" banner, not by its name: on most
+# Linux systems "awk" is gawk or mawk under another name, and BWK awk, where
+# installed, goes by original-awk, nawk or bwk-awk.  The system awk is always
+# run, being the one a user gets, and the first BWK awk found is added when
+# the system awk is not it.  An explicit AWKS is a hand-picked list, which is
+# not a sweep, so the two are refused together.
+awks_missing=
+if [ -n "${AWKS:-}" ]; then
+	if [ "${SWEEP:-0}" = 1 ]; then
+		echo "run.sh: SWEEP=1 runs every awk found; unset AWKS" >&2
+		exit 2
+	fi
+else
+	bwk=
+	for a in awk original-awk nawk bwk-awk; do
+		command -v "$a" >/dev/null 2>&1 || continue
+		case $("$a" --version 2>&1 < /dev/null) in
+		"awk version "*)	bwk=$a; break ;;
+		esac
+	done
+	[ -z "$bwk" ] && awks_missing="$awks_missing BWK-awk"
+	command -v awk >/dev/null 2>&1 && AWKS="awk
+"
+	[ -n "$bwk" ] && [ "$bwk" != awk ] && AWKS="$AWKS$bwk
+"
+	for a in mawk gawk; do
+		if command -v "$a" >/dev/null 2>&1; then
+			AWKS="$AWKS$a
+"
+		else
+			awks_missing="$awks_missing $a"
 		fi
-	)
+	done
+	case $AWKS in
+	*gawk*)	AWKS="${AWKS}gawk --posix
+" ;;
+	esac
+fi
+if [ -n "$awks_missing" ] && [ "${SWEEP:-0}" = 1 ]; then
+	echo "run.sh: missing:$awks_missing; the portability sweep needs all four" >&2
+	exit 2
 fi
 if [ -z "$AWKS" ]; then
 	echo "run.sh: no awk found" >&2
@@ -94,6 +147,33 @@ check_err() {
 	return 0
 }
 
+# invoke NAME AWKCMD MODE WHEN -- run one case under the caller's redirections,
+# with the case's arguments in $args.  WHEN says where the engine is chosen:
+# "first" puts it before those arguments, so that a case may pin its own, and
+# "last" after them, so that it wins.  A direct case chooses it with -v, the
+# one channel awk -f leaves it.  stdin is /dev/null so that a case cannot reach
+# the harness's own, whatever the program under test decides to read.
+#
+# Globbing is off while $args is split: a query such as edge(X,Y)? is also a
+# pattern, and a file in the caller's directory that matched it would silently
+# take its place.
+# shellcheck disable=SC2086
+invoke() {
+	set -f
+	if [ -f "$1.direct" ] && [ "$4" = first ]; then
+		$2 -v awklog_mode="$3" $args -f "$AWKLOG_AWK" "$1.dl" < /dev/null
+	elif [ -f "$1.direct" ]; then
+		$2 $args -v awklog_mode="$3" -f "$AWKLOG_AWK" "$1.dl" < /dev/null
+	elif [ "$4" = first ]; then
+		"$AWKLOG" -D "$3" $args "$1.dl" < /dev/null
+	else
+		"$AWKLOG" $args -D "$3" "$1.dl" < /dev/null
+	fi
+	invoke_status=$?
+	set +f
+	return "$invoke_status"
+}
+
 run_case() {
 	dl=$1
 	awkcmd=$2
@@ -118,10 +198,7 @@ run_case() {
 
 	total=$((total + 1))
 	AWK=$awkcmd; export AWK
-	# stdin comes from /dev/null so that a case cannot reach the harness's
-	# own, whatever the program under test decides to read.
-	# shellcheck disable=SC2086
-	"$AWKLOG" -D "$mode" $args "$dl" > "$tmp/out" 2> "$tmp/err" < /dev/null
+	invoke "$name" "$awkcmd" "$mode" first > "$tmp/out" 2> "$tmp/err"
 	got_status=$?
 
 	if [ "$got_status" -ne "$want_status" ]; then
@@ -177,6 +254,10 @@ diff_case() {
 	name=${dl%.dl}
 	base=${name##*/}
 
+	# getopts stops at the first operand, so a -D appended after one would
+	# be taken for a file name (cli-stdin-dash passes "-").
+	[ -f "$name.nodiff" ] && return 0
+
 	args=
 	[ -f "$name.args" ] && args=$(cat "$name.args")
 
@@ -186,11 +267,9 @@ diff_case() {
 	total=$((total + 1))
 	AWK=$awkcmd; export AWK
 	AWKLOG_DUMP=1; export AWKLOG_DUMP
-	# shellcheck disable=SC2086
-	"$AWKLOG" $args -D semi "$dl" > "$tmp/dump.semi" 2> /dev/null < /dev/null
+	invoke "$name" "$awkcmd" semi last > "$tmp/dump.semi" 2> /dev/null
 	semi_status=$?
-	# shellcheck disable=SC2086
-	"$AWKLOG" $args -D naive "$dl" > "$tmp/dump.naive" 2> /dev/null < /dev/null
+	invoke "$name" "$awkcmd" naive last > "$tmp/dump.naive" 2> /dev/null
 	naive_status=$?
 	unset AWKLOG_DUMP
 
@@ -214,12 +293,13 @@ diff_case() {
 
 	# A run that succeeded has a model; an empty dump means the hook, not
 	# the engines, has stopped working.  -c never evaluates, so it has
-	# nothing to dump and is not asked to, and a case that declares
-	# NAME.nodump has no relations to begin with.
+	# nothing to dump and is not asked to -- awklog_check=1 is its spelling
+	# in a direct case -- and a case that declares NAME.nodump has no
+	# relations to begin with.
 	if [ "$want_status" -eq 0 ] && [ ! -f "$name.nodump" ] &&
 	   ! grep -q . "$tmp/dump.semi"; then
 		case " $args " in
-		*" -c "*)	;;
+		*" -c "*|*" awklog_check=1 "*)	;;
 		*)	report_fail "$base" "$awkcmd" "naive/semi" \
 				"exited 0 but dumped no relations"
 			return 1 ;;
@@ -268,5 +348,9 @@ LIST_EOF
 
 awk_list=$(echo "$AWKS" | tr '\n' ' ')
 echo "ran $total check(s), $failed failure(s); awk: $awk_list"
+if [ -n "$awks_missing" ]; then
+	echo "run.sh: warning: missing:$awks_missing; the portability sweep" \
+		"is incomplete" >&2
+fi
 [ "$failed" -eq 0 ] || exit 1
 exit 0

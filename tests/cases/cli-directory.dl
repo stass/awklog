@@ -1,0 +1,4 @@
+% A directory operand is refused by the wrapper: BWK awk would read it as
+% an empty file and exit 0, gawk skip it with a warning, and mawk and
+% gawk --posix fail -- three behaviours for one mistake.
+p(a).

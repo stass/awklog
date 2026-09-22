@@ -1,13 +1,13 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Milestone M6 (PLAN.md section 11): option decoding, source collection,
+# Milestone M7 (PLAN.md section 11): option decoding, source collection,
 # lexer, parser, diagnostics, the predicate and tuple tables, fact loading,
 # the safety checks, the dependency graph, stratification, both evaluators --
 # the naive oracle behind -D naive and the semi-naive deltas of -D semi --
-# queries, the text, csv and tsv formats, -s and -n are in place.  awklog is
-# batch only: spec §59's interactive mode is not implemented, for the reasons
-# in PLAN.md §14.8.  Docs, examples and the size trim (M7, M8) are still to
-# come.
+# queries, the text, csv and tsv formats, -s and -n are in place, and
+# README.md documents them.  awklog is batch only: spec §59's interactive mode
+# is not implemented, for the reasons in PLAN.md §14.8.  The random
+# differential tests and the size trim (M8) are still to come.
 #
 # Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
 # PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),

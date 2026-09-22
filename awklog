@@ -74,7 +74,8 @@ text|csv|tsv)	;;
 esac
 
 # Locate the interpreter: explicit override, then a copy next to this script
-# (so a checkout runs uninstalled), then the install-time libexec path.
+# (so a checkout runs uninstalled), then the install-time libexec path, which
+# make install rewrites to its own LIBEXECDIR.
 AWK=${AWK:-awk}
 libexec=${AWKLOG_LIBEXEC:-/usr/local/libexec/awklog.awk}
 if [ -n "${AWKLOG_AWK:-}" ]; then
@@ -93,12 +94,29 @@ if [ ! -f "$interp" ]; then
 fi
 
 # A file operand that looks like name=value would be taken by awk as a variable
-# assignment; make such names unambiguous paths instead.
+# assignment, and one starting with "-" as an option; make such names
+# unambiguous paths instead.
+#
+# An operand awk cannot read is refused here, because each awk handles it its
+# own way: a missing file exits 2 with four different messages, and a
+# directory is read as empty with status 0 by BWK awk, skipped with a warning
+# by gawk, and an error under mawk and gawk --posix.  "-" is standard input.
 operands=$#
 for file in "$@"; do
+	if [ "$file" != - ]; then
+		if [ -d "$file" ]; then
+			echo "$prog: $file: is a directory" >&2
+			exit 2
+		fi
+		if [ ! -r "$file" ]; then
+			echo "$prog: $file: cannot open" >&2
+			exit 2
+		fi
+	fi
 	case $file in
+	-)		set -- "$@" "$file" ;;
 	/*|./*|../*)	set -- "$@" "$file" ;;
-	*=*)		set -- "$@" "./$file" ;;
+	-*|*=*)		set -- "$@" "./$file" ;;
 	*)		set -- "$@" "$file" ;;
 	esac
 done

@@ -35,6 +35,7 @@ covers and what was tested, e.g. `M2: predicate and tuple tables`.
 
 ```sh
 make test                 # tests/run.sh: every case x {semi, naive} x every awk found
+make sweep                # the same, but exit 2 unless all four awks are found
 sh tests/run.sh NAME      # one case; VERBOSE=1 to list passes
 make lint                 # sh -n, awk parse check, forbidden-construct grep
 make count                # line count against the 700-1200 budget
