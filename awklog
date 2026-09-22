@@ -1,0 +1,136 @@
+#!/bin/sh
+#
+# awklog -- a tiny stratified Datalog interpreter in portable AWK.
+#
+# This wrapper does all command-line parsing (POSIX getopts) and hands the
+# settings to awklog.awk through the environment rather than through "awk -v",
+# because -v performs escape-sequence processing on the value and would corrupt
+# a query containing \n inside a string literal (PLAN.md section 10).
+#
+# Exit status: 0 success, 1 program error, 2 usage error.
+
+prog=${0##*/}
+
+usage() {
+	cat <<USAGE
+usage: $prog [-cinsv] [-D mode] [-F format] [-q query] [file ...]
+
+  -c          check the program only; do not evaluate or print results
+  -D mode     evaluation engine: semi (default) or naive
+  -F format   output format: text (default), csv or tsv
+  -h          print this message and exit
+  -i          enter interactive mode after evaluation
+  -n          suppress query output
+  -q query    run a query after loading the program; repeatable
+  -s          sort each query's rows
+  -v          verbose diagnostics; repeatable
+
+With no file operands the program is read from standard input.
+
+Environment:
+  AWK               awk to run (default: awk)
+  AWKLOG_AWK        path to awklog.awk
+  AWKLOG_LIBEXEC    installed awklog.awk, used when no sibling copy exists
+USAGE
+}
+
+check=
+interactive=
+mode=
+format=
+quiet=
+sort=
+verbose=0
+query=
+queries=0
+
+while getopts cD:F:hinq:sv opt; do
+	case $opt in
+	c)	check=1 ;;
+	D)	mode=$OPTARG ;;
+	F)	format=$OPTARG ;;
+	h)	usage; exit 0 ;;
+	i)	interactive=1 ;;
+	n)	quiet=1 ;;
+	q)	if [ "$queries" -eq 0 ]; then
+			query=$OPTARG
+		else
+			query="$query
+$OPTARG"
+		fi
+		queries=$((queries + 1)) ;;
+	s)	sort=1 ;;
+	v)	verbose=$((verbose + 1)) ;;
+	*)	usage >&2; exit 2 ;;
+	esac
+done
+shift $((OPTIND - 1))
+
+case ${mode:-semi} in
+naive|semi)	;;
+*)	echo "$prog: unknown evaluation mode: $mode" >&2; exit 2 ;;
+esac
+
+case ${format:-text} in
+text|csv|tsv)	;;
+*)	echo "$prog: unknown output format: $format" >&2; exit 2 ;;
+esac
+
+# Locate the interpreter: explicit override, then a copy next to this script
+# (so a checkout runs uninstalled), then the install-time libexec path.
+AWK=${AWK:-awk}
+libexec=${AWKLOG_LIBEXEC:-/usr/local/libexec/awklog.awk}
+if [ -n "${AWKLOG_AWK:-}" ]; then
+	interp=$AWKLOG_AWK
+else
+	dir=${0%/*}
+	if [ "$dir" != "$0" ] && [ -f "$dir/awklog.awk" ]; then
+		interp="$dir/awklog.awk"
+	else
+		interp=$libexec
+	fi
+fi
+if [ ! -f "$interp" ]; then
+	echo "$prog: cannot find awklog.awk (tried $interp)" >&2
+	exit 2
+fi
+
+# A file operand that looks like name=value would be taken by awk as a variable
+# assignment; make such names unambiguous paths instead.
+operands=$#
+for file in "$@"; do
+	case $file in
+	/*|./*|../*)	set -- "$@" "$file" ;;
+	*=*)		set -- "$@" "./$file" ;;
+	*)		set -- "$@" "$file" ;;
+	esac
+done
+[ "$operands" -gt 0 ] && shift "$operands"
+
+AWKLOG_CHECK=$check
+AWKLOG_FORMAT=$format
+AWKLOG_INTERACTIVE=$interactive
+AWKLOG_MODE=$mode
+AWKLOG_QUERY=$query
+AWKLOG_QUIET=$quiet
+AWKLOG_SORT=$sort
+AWKLOG_VERBOSE=$verbose
+AWKLOG_STDERR=${AWKLOG_STDERR:-/dev/stderr}
+AWKLOG_STDIN=${AWKLOG_STDIN:-/dev/stdin}
+# Prompt only when standard input is a terminal.
+if [ -z "${AWKLOG_PROMPT+set}" ]; then
+	if [ -t 0 ]; then
+		AWKLOG_PROMPT="awklog> "
+	else
+		AWKLOG_PROMPT=
+	fi
+fi
+export AWKLOG_CHECK AWKLOG_FORMAT AWKLOG_INTERACTIVE AWKLOG_MODE \
+	AWKLOG_PROMPT AWKLOG_QUERY AWKLOG_QUIET AWKLOG_SORT AWKLOG_STDERR \
+	AWKLOG_STDIN AWKLOG_VERBOSE
+
+# Byte-deterministic ordering for -s.
+LC_ALL=${LC_ALL:-C}
+export LC_ALL
+
+exec $AWK -f "$interp" "$@"
