@@ -13,14 +13,13 @@ prog=${0##*/}
 
 usage() {
 	cat <<USAGE
-usage: $prog [-cinsv] [-D mode] [-F format] [-q query] [file ...]
+usage: $prog [-cnsv] [-D mode] [-F format] [-q query] [file ...]
 
   -c          check the program only; do not evaluate or print results
   -D mode     evaluation engine: semi (default) or naive
   -F format   output format: text (default), csv or tsv
   -h          print this message and exit
-  -i          enter interactive mode after evaluation; reads standard input
-  -n          suppress query output; the -i session still answers
+  -n          suppress query output
   -q query    run a query after loading the program; repeatable
   -s          sort each query's rows
   -v          verbose diagnostics; repeatable
@@ -35,7 +34,6 @@ USAGE
 }
 
 check=
-interactive=
 mode=
 format=
 quiet=
@@ -44,13 +42,12 @@ verbose=0
 query=
 queries=0
 
-while getopts cD:F:hinq:sv opt; do
+while getopts cD:F:hnq:sv opt; do
 	case $opt in
 	c)	check=1 ;;
 	D)	mode=$OPTARG ;;
 	F)	format=$OPTARG ;;
 	h)	usage; exit 0 ;;
-	i)	interactive=1 ;;
 	n)	quiet=1 ;;
 	q)	if [ "$queries" -eq 0 ]; then
 			query=$OPTARG
@@ -75,26 +72,6 @@ case ${format:-text} in
 text|csv|tsv)	;;
 *)	echo "$prog: unknown output format: $format" >&2; exit 2 ;;
 esac
-
-# -c stops before evaluation and -i answers queries against what evaluation
-# produced; accepting both and dropping the -i would answer a documented
-# request with silence.  Checked before the operand rule below, and in that
-# order in awklog.awk too, so that both paths name the same fault first.
-if [ -n "$interactive" ] && [ -n "$check" ]; then
-	echo "$prog: -c and -i cannot be combined" >&2
-	exit 2
-fi
-
-# The REPL reads standard input, so a program read from there has already
-# eaten the session (PLAN.md section 15).  Refusing the combination beats
-# leaving the user at a prompt that reached EOF before it was printed --
-# unless AWKLOG_STDIN puts the session on another descriptor, which is
-# exactly what that variable is for.
-if [ -n "$interactive" ] && [ "$#" -eq 0 ] && [ -z "${AWKLOG_STDIN:-}" ]; then
-	echo "$prog: -i needs a program file, or AWKLOG_STDIN set: the REPL" \
-		"reads standard input" >&2
-	exit 2
-fi
 
 # Locate the interpreter: explicit override, then a copy next to this script
 # (so a checkout runs uninstalled), then the install-time libexec path.
@@ -129,44 +106,14 @@ done
 
 AWKLOG_CHECK=$check
 AWKLOG_FORMAT=$format
-AWKLOG_INTERACTIVE=$interactive
 AWKLOG_MODE=$mode
 AWKLOG_QUERY=$query
 AWKLOG_QUIET=$quiet
 AWKLOG_SORT=$sort
 AWKLOG_VERBOSE=$verbose
 AWKLOG_STDERR=${AWKLOG_STDERR:-/dev/stderr}
-# Prompt only when -i will run a session and the descriptor it reads is a
-# terminal.  Ordinarily that is this shell's stdin, asked directly.
-# AWKLOG_STDIN moves the session elsewhere, and that path is asked only when
-# it is already known to be a character device: opening a fifo here would
-# block the wrapper until a writer arrived and then close it again, leaving
-# awk's own open with no writer and the session hung -- and a fifo is the
-# natural way to drive a session from another process.
-#
-# Decided before AWKLOG_STDIN is defaulted below, so the ordinary case keeps
-# using [ -t 0 ]: on a host without /dev/stdin -- the kind of host spec §64's
-# injection exists for -- re-opening it would fail and suppress the prompt on
-# a terminal.
-if [ -z "${AWKLOG_PROMPT+set}" ]; then
-	AWKLOG_PROMPT=
-	if [ -z "$interactive" ]; then
-		: # no session, no prompt
-	elif [ -z "${AWKLOG_STDIN:-}" ]; then
-		[ -t 0 ] && AWKLOG_PROMPT="awklog> "
-	elif [ -c "$AWKLOG_STDIN" ]; then
-		# 2>/dev/null first: redirections apply left to right, and it
-		# is the failing open of a device that is not there that has
-		# to be swallowed.  Reporting that is awklog.awk's job, once,
-		# when it tries to read it.
-		[ -t 0 ] 2>/dev/null < "$AWKLOG_STDIN" &&
-			AWKLOG_PROMPT="awklog> "
-	fi
-fi
-AWKLOG_STDIN=${AWKLOG_STDIN:-/dev/stdin}
-export AWKLOG_CHECK AWKLOG_FORMAT AWKLOG_INTERACTIVE AWKLOG_MODE \
-	AWKLOG_PROMPT AWKLOG_QUERY AWKLOG_QUIET AWKLOG_SORT AWKLOG_STDERR \
-	AWKLOG_STDIN AWKLOG_VERBOSE
+export AWKLOG_CHECK AWKLOG_FORMAT AWKLOG_MODE AWKLOG_QUERY AWKLOG_QUIET \
+	AWKLOG_SORT AWKLOG_STDERR AWKLOG_VERBOSE
 
 # Byte-deterministic ordering for -s.
 LC_ALL=${LC_ALL:-C}

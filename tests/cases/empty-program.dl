@@ -1,0 +1,5 @@
+% A program with no predicates at all is not an error, and the relation dump
+% it produces is empty rather than absent: the dump writes through sort(1),
+% and closing a pipe that nothing opened returns -1 on every awk in the
+% matrix, which would read as a sort that failed.  dump_relations() returns
+% before the pipe instead.

@@ -1,5 +1,0 @@
-% A program with no predicates at all still has to answer .dump, and answer
-% it with silence: the dump writes through sort(1), a pipe nothing opened
-% cannot be closed, and close() of one that was never opened returns -1 on
-% every awk in the matrix -- which would read as a sort that failed and kill
-% the session over a program that was merely empty.

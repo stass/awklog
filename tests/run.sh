@@ -8,8 +8,6 @@
 #
 #	NAME.dl		the program (may contain embedded queries)
 #	NAME.args	extra CLI arguments, one line	(default: none)
-#	NAME.in		stdin for the run, which -i reads	(default: /dev/null)
-#	NAME.env	sh sourced around the run, for AWKLOG_* with no option
 #	NAME.nodump	present when the case legitimately dumps no relations
 #	NAME.out	expected stdout, byte-exact	(default: empty)
 #	NAME.err	expected stderr, one pattern per line, each must match
@@ -118,22 +116,12 @@ run_case() {
 	want_status=0
 	[ -f "$name.status" ] && want_status=$(cat "$name.status")
 
-	# Always redirected, so that a case without -i cannot reach for the
-	# harness's own stdin and a case with it reads only what it is given.
-	stdin=/dev/null
-	[ -f "$name.in" ] && stdin=$name.in
-
 	total=$((total + 1))
 	AWK=$awkcmd; export AWK
-	# NAME.env is sourced in a subshell around the run, so that a case can
-	# set an AWKLOG_* the wrapper has no option for -- AWKLOG_PROMPT above
-	# all, which the wrapper otherwise decides from whether stdin is a
-	# terminal, and a harness has none.
-	(
-		[ -f "$name.env" ] && . "$name.env"
-		# shellcheck disable=SC2086
-		exec "$AWKLOG" -D "$mode" $args "$dl"
-	) > "$tmp/out" 2> "$tmp/err" < "$stdin"
+	# stdin comes from /dev/null so that a case cannot reach the harness's
+	# own, whatever the program under test decides to read.
+	# shellcheck disable=SC2086
+	"$AWKLOG" -D "$mode" $args "$dl" > "$tmp/out" 2> "$tmp/err" < /dev/null
 	got_status=$?
 
 	if [ "$got_status" -ne "$want_status" ]; then
@@ -195,23 +183,14 @@ diff_case() {
 	want_status=0
 	[ -f "$name.status" ] && want_status=$(cat "$name.status")
 
-	stdin=/dev/null
-	[ -f "$name.in" ] && stdin=$name.in
-
 	total=$((total + 1))
 	AWK=$awkcmd; export AWK
 	AWKLOG_DUMP=1; export AWKLOG_DUMP
-	(
-		[ -f "$name.env" ] && . "$name.env"
-		# shellcheck disable=SC2086
-		exec "$AWKLOG" $args -D semi "$dl"
-	) > "$tmp/dump.semi" 2> /dev/null < "$stdin"
+	# shellcheck disable=SC2086
+	"$AWKLOG" $args -D semi "$dl" > "$tmp/dump.semi" 2> /dev/null < /dev/null
 	semi_status=$?
-	(
-		[ -f "$name.env" ] && . "$name.env"
-		# shellcheck disable=SC2086
-		exec "$AWKLOG" $args -D naive "$dl"
-	) > "$tmp/dump.naive" 2> /dev/null < "$stdin"
+	# shellcheck disable=SC2086
+	"$AWKLOG" $args -D naive "$dl" > "$tmp/dump.naive" 2> /dev/null < /dev/null
 	naive_status=$?
 	unset AWKLOG_DUMP
 

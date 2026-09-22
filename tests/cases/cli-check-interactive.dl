@@ -1,4 +1,0 @@
-% -c stops before evaluation and -i answers queries against what evaluation
-% produced, so the two cannot both be honoured.  Refusing beats accepting the
-% pair and quietly dropping the -i.
-edge(a, b).

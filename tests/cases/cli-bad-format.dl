@@ -1,0 +1,5 @@
+% A usage error is status 2, not 1 (spec §65): the wrapper validates the
+% option and never starts awk.  This is the suite's only case that pins that
+% distinction -- without one, an exit 2 quietly becoming an exit 1 would keep
+% the harness green.
+edge(a, b).
