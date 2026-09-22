@@ -1,0 +1,7 @@
+% A session piped from a CRLF file.  The lexer counts \r as whitespace, so
+% queries would parse either way; what breaks without the REPL trimming it
+% too is every dot command, which is matched whole -- .quit included, so the
+% session would run past the end of what was typed.  The query after .quit
+% here is what catches that: its row must not appear.
+edge(a, b).
+edge(b, c).

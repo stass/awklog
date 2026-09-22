@@ -1,0 +1,9 @@
+% -n silences the program's own queries, not the ones typed at the prompt:
+% a session that answered nothing would leave nothing to interact with
+% (PLAN.md §14.8).  The embedded query below prints nothing and the identical
+% one typed at the prompt prints its rows, so the expected output carries
+% them exactly once.
+edge(a, b).
+edge(b, c).
+
+edge(X, Y)?

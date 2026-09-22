@@ -1,0 +1,4 @@
+edge(X, Y)?
+.stats
+.quit
+edge(a, b)?

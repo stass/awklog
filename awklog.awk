@@ -1,11 +1,12 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Milestone M5 (PLAN.md section 11): option decoding, source collection,
+# Milestone M6 (PLAN.md section 11): option decoding, source collection,
 # lexer, parser, diagnostics, the predicate and tuple tables, fact loading,
 # the safety checks, the dependency graph, stratification, both evaluators --
 # the naive oracle behind -D naive and the semi-naive deltas of -D semi --
-# queries and text output are in place.  The csv and tsv formats, -s, -n and
-# the REPL (M6) are still to come.
+# queries, the text, csv and tsv formats, -s, -n and the interactive mode of
+# -i are in place.  Docs, examples and the size trim (M7, M8) are still to
+# come.
 #
 # Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
 # PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),
@@ -34,6 +35,12 @@ FNR == 1 {
 END {
 	if (dying)
 		exit exit_code
+	# The wrapper refuses this before awk starts; this is the
+	# direct-invocation path.  An injected AWKLOG_STDIN puts the session
+	# on another descriptor and is fine.
+	if (opt_interactive && STDIN == "/dev/stdin" && args_are_stdin())
+		usage_error("-i cannot take the program on standard input: " \
+			"the REPL reads standard input too")
 	parse_all()
 	load_facts()
 	check_program()
@@ -63,7 +70,7 @@ function init() {
 
 	# The lexer classifies bytes with index() into these sets rather than
 	# scanning tokens with match(), which takes no start offset and so would
-	# copy the rest of the line for every token (PLAN.md §14.8).
+	# copy the rest of the line for every token (PLAN.md §14.9).
 	UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	LOWER = "abcdefghijklmnopqrstuvwxyz"
 	DIGITS = "0123456789"
@@ -94,20 +101,28 @@ function init() {
 		usage_error("unknown output format: " opt_format)
 	if (opt_mode != "semi" && opt_mode != "naive")
 		usage_error("unknown evaluation mode: " opt_mode)
+	# -c stops before evaluation and the REPL answers queries against what
+	# evaluation produced, so the two cannot both be honoured.  Refusing
+	# beats quietly dropping the -i, which is what the M4 stubs were
+	# written to avoid.  The wrapper refuses first; this is the
+	# direct-invocation path.
+	if (opt_check && opt_interactive)
+		usage_error("-c and -i cannot be combined: -i needs the "\
+			"model that -c declines to build")
 
-	# csv, tsv, -s, -n and -i arrive with M6 (PLAN.md section 11).  Until
-	# they do they are refused rather than accepted and ignored: with M4's
-	# query output in place, accepting them would print text for -F csv,
-	# unsorted rows for -s, and rows at all for -n.  The wrapper refuses
-	# them first; this is the direct-invocation path.
-	if (opt_format != "text")
-		usage_error("output format " opt_format " is not implemented yet")
-	if (opt_sort)
-		usage_error("-s is not implemented yet")
-	if (opt_quiet)
-		usage_error("-n is not implemented yet")
-	if (opt_interactive)
-		usage_error("-i is not implemented yet")
+	# The column separator of each format; how a column itself is spelled
+	# is format_field()'s business (spec §60-62).
+	if (opt_format == "csv")
+		FIELDSEP = ","
+	else if (opt_format == "tsv")
+		FIELDSEP = "\t"
+	else
+		FIELDSEP = " "
+
+	# -s sorts each query's rows on their way out through sort(1), the only
+	# sort available without asort() (spec §63, PLAN.md §14.3).  The dump
+	# uses the same command, and both close it before the other can run.
+	SORTCMD = "sort"
 
 	src_n = 0
 	stat_lines = 0
@@ -126,6 +141,11 @@ function init() {
 	stat_iterations = 0
 	max_stratum = 0
 	join_stop = 0
+	sort_open = 0
+	sort_warned = 0
+	repl_catch = 0
+	repl_lines = 0
+	parse_fatal = 0
 	delta_active = 0
 	delta_lit = 0
 	delta_pending = 0
@@ -157,6 +177,23 @@ function opt_num(v, name, dflt) {
 # All stages run in END, so exit here terminates immediately; the dying flag
 # covers the one caller in BEGIN, where exit would otherwise fall into END.
 function die(where, msg) {
+	# The REPL is the one caller that must survive an error (PLAN.md
+	# section 10): a bad statement reports and the prompt comes back.
+	# Unwinding is the lexer's job -- once parse_fatal is set it hands out
+	# EOF for ever, so every parse loop runs out -- and join_stop stops a
+	# relation scan that a run-time comparison error interrupted.  Only the
+	# first message of a statement is printed; the rest are wreckage.
+	if (repl_catch) {
+		if (!parse_fatal) {
+			parse_fatal = 1
+			join_stop = 1
+			if (where != "")
+				print where ": " msg > STDERR
+			else
+				print "awklog: " msg > STDERR
+		}
+		return
+	}
 	if (where != "")
 		print where ": " msg > STDERR
 	else
@@ -209,8 +246,31 @@ function array_clear(a, k) {
 
 # Input lines are kept with their origin so that the lexer's (line, column)
 # cursor yields file:line:col diagnostics with no offset mapping table.
+# Whether the operands leave awk reading standard input, which is where the
+# REPL reads too.  Decided from ARGV rather than from what arrived, because an
+# empty program arrives as nothing at all and would arm no flag -- and then
+# -i would exit 0 in silence, which is the very thing the guard exists to
+# stop.
+function args_are_stdin(   i, a, files) {
+	files = 0
+	for (i = 1; i < ARGC; i++) {
+		a = ARGV[i]
+		# awk reads a var=value operand as an assignment, not a file.
+		if (a == "" || a ~ /^[A-Za-z_][A-Za-z_0-9]*=/)
+			continue
+		if (a == "-" || a == "/dev/stdin")
+			return 1
+		files++
+	}
+	return files == 0
+}
+
 function source_add_line(file, fnr, text) {
-	if (file == "")
+	# Standard input reaches awk under three spellings: BWK awk leaves
+	# FILENAME empty, mawk and gawk set it to "-", and an explicit
+	# /dev/stdin operand names the same stream a third way.  All three get
+	# one label, so a diagnostic reads the same whichever awk is running.
+	if (file == "" || file == "-" || file == "/dev/stdin")
 		file = "<stdin>"
 	src_n++
 	src_file[src_n] = file
@@ -265,6 +325,11 @@ function lex_start(i) {
 # (spec §17), and keeping the two slots apart saves saving and restoring the
 # current token around every peek.
 function lex_next() {
+	# A caught error unwinds by starving the parser of tokens.  tok_* is
+	# left pointing at the token that went wrong, which costs nothing: the
+	# only reader is a diagnostic, and die() prints no second one.
+	if (parse_fatal)
+		return "EOF"
 	if (!have_peek)
 		lex_scan()
 	have_peek = 0
@@ -276,6 +341,8 @@ function lex_next() {
 }
 
 function lex_peek() {
+	if (parse_fatal)
+		return "EOF"
 	if (!have_peek) {
 		lex_scan()
 		have_peek = 1
@@ -410,14 +477,23 @@ function lex_word_kind(w,   c) {
 }
 
 # String literals do not span lines; escapes are exactly those of spec §7.2.
+# This is the one scanner loop an error has to break out of by hand.  Every
+# other lex_error() site either advances the cursor or falls off the end of
+# its function, so the parse_fatal guard in lex_next()/lex_peek() takes it
+# from there; here the loop would come round to the same byte and report the
+# same error for ever, because lex_error() returns when the REPL is catching.
+# The token it then hands back is wreckage, and goes unread for the same
+# reason: the guard answers EOF from the next call on.
 function lex_string(line,   col, start, c, esc, out) {
 	start = lex_col
 	col = lex_col + 1
 	out = ""
 	for (;;) {
 		c = substr(line, col, 1)
-		if (c == "")
+		if (c == "") {
 			lex_error(lex_i, start, "unterminated string literal")
+			break
+		}
 		if (c == "\"") {
 			col++
 			break
@@ -425,13 +501,19 @@ function lex_string(line,   col, start, c, esc, out) {
 		if (c == "\\") {
 			col++
 			c = substr(line, col, 1)
-			if (c == "")
+			if (c == "") {
 				lex_error(lex_i, start, "unterminated string literal")
+				break
+			}
 			# The two tables are parallel: \\ \" n t r -> \ " NL TAB CR.
 			esc = index("\\\"ntr", c)
-			if (esc == 0)
-				# col is on the escaped character; point at the backslash.
-				lex_error(lex_i, col - 1, "unknown escape '\\" c "' in string literal")
+			if (esc == 0) {
+				# col is on the escaped character; point at the
+				# backslash.
+				lex_error(lex_i, col - 1,
+					"unknown escape '\\" c "' in string literal")
+				break
+			}
 			out = out substr("\\\"\n\t\r", esc, 1)
 			col++
 			continue
@@ -604,8 +686,6 @@ function parse_statement(query_only,   r, k, n) {
 		}
 		rule_body_n[r] = n
 		expect(".", "'.'")
-		pred_has_rule[rule_head_pred[r]] = 1
-		stat_rules++
 	} else if (k == ".") {
 		lex_next()
 		if (rule_lit_kind[r, 1] != 1)
@@ -614,7 +694,6 @@ function parse_statement(query_only,   r, k, n) {
 		rule_promote_head(r)
 		rule_body_n[r] = 0
 		rule_is_fact[r] = 1
-		pred_has_fact[rule_head_pred[r]] = 1
 	} else if (k == "," || k == "?") {
 		n = 1
 		while (lex_peek() == ",") {
@@ -634,7 +713,25 @@ function parse_statement(query_only,   r, k, n) {
 	}
 	if (query_only && !rule_is_query[r])
 		die(source_where(rule_line[r], rule_col[r]),
-			"error: only queries may be given with -q")
+			"error: only queries may be " \
+			(repl_catch ? "typed at the prompt" : "given with -q"))
+	# What the statement defines is recorded only now that it is known to
+	# be one this caller accepts.  The REPL can only find out that a fact
+	# or a rule was typed at it after parsing the whole thing, and a
+	# predicate marked as defined on the way through would outlive the
+	# statement that marked it -- for an existing predicate, past any
+	# rollback -- and quietly silence the undefined warning it is there to
+	# give.  parse_fatal covers the same ground from the other side: a
+	# caught die() returns rather than exiting, so a statement that failed
+	# anywhere above is still here, and it defines nothing either.
+	if (rule_is_query[r] || parse_fatal)
+		return
+	if (rule_is_fact[r])
+		pred_has_fact[rule_head_pred[r]] = 1
+	else {
+		pred_has_rule[rule_head_pred[r]] = 1
+		stat_rules++
+	}
 }
 
 function rule_new(ln, col,   r) {
@@ -944,22 +1041,29 @@ function check_compare_types(r, i,   op, k, kind, where) {
 # A predicate with neither facts nor rules is an empty relation rather than an
 # error, so that a program whose fact file is absent still runs; the warning
 # goes to stderr, leaving stdout clean for pipelines (PLAN.md section 6).
-function check_undefined(   r, i, p) {
+function check_undefined(   r) {
 	for (r = 1; r <= rule_n; r++)
-		for (i = 1; i <= rule_body_n[r]; i++) {
-			if (rule_lit_kind[r, i] == 3)
-				continue
-			p = rule_lit_pred[r, i]
-			if ((p in pred_has_fact) || (p in pred_has_rule))
-				continue
-			if (p in pred_undefined)
-				continue
-			pred_undefined[p] = 1
-			stat_undefined++
-			warn(source_where(rule_lit_line[r, i], rule_lit_col[r, i]),
-				"undefined predicate " predicate_label(p) \
-				": no facts and no rules, treated as empty")
-		}
+		check_undefined_rule(r)
+}
+
+# Split out per rule because the REPL checks one statement at a time.  The
+# memo is per predicate, so a name stays reported once however many literals
+# mention it.
+function check_undefined_rule(r,   i, p) {
+	for (i = 1; i <= rule_body_n[r]; i++) {
+		if (rule_lit_kind[r, i] == 3)
+			continue
+		p = rule_lit_pred[r, i]
+		if ((p in pred_has_fact) || (p in pred_has_rule))
+			continue
+		if (p in pred_undefined)
+			continue
+		pred_undefined[p] = 1
+		stat_undefined++
+		warn(source_where(rule_lit_line[r, i], rule_lit_col[r, i]),
+			"undefined predicate " predicate_label(p) \
+			": no facts and no rules, treated as empty")
+	}
 }
 
 function rule_noun(r) {
@@ -1480,10 +1584,17 @@ function eval_compare(r, i,   op, a, b) {
 		return a == b
 	if (op == "!=")
 		return a != b
-	if (substr(a, 1, 2) != "n:")
+	# Outside the REPL these do not return; inside it the statement is
+	# already abandoned, so the comparison simply fails rather than
+	# comparing 0 against 0 and letting rows through behind the error.
+	if (substr(a, 1, 2) != "n:") {
 		compare_type_error(r, i, 1, a)
-	if (substr(b, 1, 2) != "n:")
+		return 0
+	}
+	if (substr(b, 1, 2) != "n:") {
 		compare_type_error(r, i, 2, b)
+		return 0
+	}
 	a = substr(a, 3) + 0
 	b = substr(b, 3) + 0
 	if (op == "<")
@@ -1561,17 +1672,85 @@ function run_queries(   q) {
 	}
 }
 
-# Every line a query produces goes through here, because a dump run has to
-# suppress the lot.  Rows come out in the order the evaluator reached them,
-# which spec §63 leaves unspecified and which the two engines genuinely
-# differ on -- so letting them into a dump would make two engines that agree
-# on the whole model look as though they disagreed.  The queries still run:
-# they cannot change a relation, but a comparison against a non-numeric
-# operand still has to fail where it would fail without the hook.  M6's -n
-# suppresses exactly these lines.
+# Everything a query prints goes through one of these two, because -n and a
+# dump run have to suppress the lot.  Rows come out in the order the
+# evaluator reached them, which spec §63 leaves unspecified and which the two
+# engines genuinely differ on -- so letting them into a dump would make two
+# engines that agree on the whole model look as though they disagreed.  The
+# queries still run under the hook: they cannot change a relation, but a
+# comparison against a non-numeric operand still has to fail where it would
+# fail without it.
+#
+# query_print() is for the blank line between blocks, row_print() for the
+# rows themselves, which -s diverts through sort(1).
 function query_print(line) {
-	if (!opt_dump)
+	if (!opt_dump && !opt_quiet)
 		print line
+}
+
+function row_print(line) {
+	if (opt_dump || opt_quiet)
+		return
+	if (!opt_sort) {
+		print line
+		return
+	}
+	# An RFC 4180 field holding a newline spans lines, and sort(1) sorts
+	# lines, so this row is about to be pulled apart.  Refusing -s for csv
+	# outright would cost every result that holds no newline, which is
+	# nearly all of them, so the combination is allowed and diagnosed --
+	# once, on the first row it actually damages.
+	if (opt_format == "csv" && !sort_warned && index(line, "\n")) {
+		sort_warned = 1
+		warn("", "-s cannot sort a csv row containing a newline: "\
+			"RFC 4180 spells such a value across lines and "\
+			"sort(1) will separate them")
+	}
+	if (!sort_open) {
+		# The rows reach the terminal through sort's stdout and not
+		# through awk's, so anything already printed -- the blank line
+		# that separates this block from the last one, above all -- has
+		# to be pushed out first or it could land after them (PLAN.md
+		# section 13).
+		fflush()
+		sort_open = 1
+	}
+	print line | SORTCMD
+}
+
+# Each query is sorted on its own rather than the whole output at once
+# (PLAN.md §14.3), so closing the pipe here is what keeps one block's rows
+# from mixing with the next one's.
+function rows_flush() {
+	if (sort_open) {
+		sort_open = 0
+		sort_close(SORTCMD, "the query's rows")
+	}
+}
+
+# Rows leave through sort's stdout, so a sort that could not run takes them
+# with it and awklog would otherwise exit 0 having printed nothing, which a
+# pipeline reads as "no rows matched".  Only two of the four awks in the
+# matrix report it -- mawk and gawk return 127 from close() on a failed pipe,
+# BWK awk and gawk --posix return 0 -- but all four return 0 on success, so
+# the check never fires wrongly and catches the failure where it can.
+#
+# Only ever called on a pipe that has been written to: close() of a command
+# that was never opened returns -1 on all four, which would read here as a
+# failure that never happened.
+function sort_close(cmd, what,   status) {
+	status = close(cmd)
+	if (status == 0)
+		return
+	# SIGPIPE is not a failure, it is the reader leaving: awklog -s f.dl
+	# | head kills sort once head has what it wants, and mawk and gawk
+	# report that here as 269 (256 + 13).  Taking it for a failed sort
+	# would make an ordinary pipeline exit 1 with a bogus diagnostic --
+	# and intermittently, since it depends on whether the reader went
+	# first.  The modulus covers a host that returns the bare signal.
+	if (status % 256 == 13)
+		return
+	die("", "sort failed (status " status "): cannot produce " what)
 }
 
 function query_run(r,   n) {
@@ -1597,8 +1776,10 @@ function query_run(r,   n) {
 	# No columns means a ground query -- including one whose only
 	# variables are anonymous, since those are never projected -- and a
 	# ground query answers true or false (spec §15).
-	if (query_ground)
-		query_print(query_rows > 0 ? "true" : "false")
+	# A statement the REPL abandoned mid-scan has no answer to give.
+	if (query_ground && !parse_fatal)
+		row_print(query_rows > 0 ? "true" : "false")
+	rows_flush()
 }
 
 # Columns are the named variables in order of first appearance (spec §14).
@@ -1616,20 +1797,43 @@ function query_emit(r,   k, v, key, row) {
 	for (k = 1; k <= rule_head_arity[r]; k++) {
 		v = bind_val[rule_head_val[r, k]]
 		key = key SUBSEP v
-		row = (k == 1) ? format_value(v) : row " " format_value(v)
+		row = (k == 1) ? format_field(v) : row FIELDSEP format_field(v)
 	}
 	if (key in query_seen)
 		return
 	query_seen[key] = 1
-	query_print(row)
+	row_print(row)
 }
 
 # ---------------------------------------------------------------- output ---
 #
-# Text format (spec §60): symbols and numbers bare, a string bare unless it
-# is empty or carries whitespace or a quote, in which case it is quoted with
-# the escapes of spec §7.2.  csv and tsv arrive with M6.
+# Three formats, one column at a time (spec §60-62):
+#
+#	text	symbols and numbers bare, a string bare unless it is empty or
+#		carries whitespace or a quote, in which case it is quoted with
+#		the escapes of spec §7.2.  This is the only format that keeps
+#		the value's type visible, since it is the only one whose reader
+#		is a person.
+#	csv	RFC 4180: a quote is doubled, and a field is quoted when it
+#		holds a comma, a quote, CR or LF, or has a leading or trailing
+#		space.  The type tag is dropped, as it is in text and tsv: no
+#		format here spells the symbol foo apart from the string "foo",
+#		since text quotes a string only when its contents force it.
+#		Only .dump does, and it is not an output format (spec §26
+#		governs what the engine compares, not what a row looks like).
+#	tsv	escaped, never quoted, which spec §62 allows as long as it is
+#		documented: backslash, tab, newline and CR become \\, \t, \n
+#		and \r, so every row is one line and every column one field.
 
+function format_field(v) {
+	if (opt_format == "csv")
+		return csv_quote(value_decode(substr(v, 3)))
+	if (opt_format == "tsv")
+		return tsv_escape(value_decode(substr(v, 3)))
+	return format_value(v)
+}
+
+# The text spelling of an encoded value, also what a diagnostic quotes back.
 function format_value(v,   kind, text) {
 	kind = substr(v, 1, 1)
 	text = value_decode(substr(v, 3))
@@ -1663,15 +1867,32 @@ function text_needs_quote(s) {
 		index(s, "\r") || index(s, "\"")
 }
 
-function text_quote(s,   out, i, c) {
-	out = "\""
+function text_quote(s) {
+	return "\"" escape_text(s, 1) "\""
+}
+
+# tsv leans on the same escapes as a quoted text value, minus the quote
+# itself, which tsv has no reason to touch.  A field with none of them is
+# returned untouched, which is the common case and skips the scan.
+function tsv_escape(s) {
+	if (index(s, "\\") == 0 && index(s, "\t") == 0 && index(s, "\n") == 0 &&
+	    index(s, "\r") == 0)
+		return s
+	return escape_text(s, 0)
+}
+
+# The escapes of spec §7.2, built with a character loop rather than gsub():
+# POSIX leaves a backslash in a gsub() replacement undefined outside \& and
+# \\ (PLAN.md section 13).
+function escape_text(s, quotes,   out, i, c) {
+	out = ""
 	for (i = 1; ; i++) {
 		c = substr(s, i, 1)
 		if (c == "")
 			break
 		if (c == "\\")
 			out = out "\\\\"
-		else if (c == "\"")
+		else if (c == "\"" && quotes)
 			out = out "\\\""
 		else if (c == "\n")
 			out = out "\\n"
@@ -1682,6 +1903,28 @@ function text_quote(s,   out, i, c) {
 		else
 			out = out c
 	}
+	return out
+}
+
+# RFC 4180.  Leading and trailing spaces are preserved by the standard but
+# eaten by a good many readers, so a field carrying one is quoted too.
+#
+# A field holding a newline is quoted and stays as it is, which is what the
+# standard asks for and what makes such a row span lines.  -s sorts lines,
+# so the two do not mix: a csv result whose values carry newlines cannot be
+# sorted meaningfully by anything line-oriented, sort(1) included.  tsv
+# escapes instead of quoting and has no such hole.
+function csv_quote(s,   out, i, c) {
+	if (index(s, ",") == 0 && index(s, "\"") == 0 && index(s, "\n") == 0 &&
+	    index(s, "\r") == 0 && s !~ /^ / && s !~ / $/)
+		return s
+	out = "\""
+	for (i = 1; ; i++) {
+		c = substr(s, i, 1)
+		if (c == "")
+			break
+		out = out (c == "\"" ? "\"\"" : c)
+	}
 	return out "\""
 }
 
@@ -1691,7 +1934,7 @@ function text_quote(s,   out, i, c) {
 # the differential test of spec §76 compares this between -D naive and -D
 # semi, and the two insert their tuples in different orders by construction.
 # Rows therefore go through sort(1) rather than out as stored: it is the same
-# mechanism -s will use (PLAN.md §14.3) and the only sort available without
+# mechanism -s uses (PLAN.md §14.3) and the only sort available without
 # asort().  A predicate's own line carries its size, so that a relation the
 # other engine left empty is a difference and not a silence.
 #
@@ -1700,7 +1943,11 @@ function text_quote(s,   out, i, c) {
 # a value holding a newline stays on one line.  M6's .dump prints this too.
 
 function dump_relations(   p, k, a, t, line, cmd) {
-	cmd = "sort"
+	# Nothing to dump means nothing opens the pipe, and closing one that
+	# was never opened would report a failure that never happened.
+	if (pred_n == 0)
+		return
+	cmd = SORTCMD
 	# The rows reach the terminal through sort's stdout and not through
 	# awk's, so anything already printed has to be pushed out first or it
 	# could land after them.  All four target awks happen to flush at the
@@ -1716,17 +1963,203 @@ function dump_relations(   p, k, a, t, line, cmd) {
 			print line | cmd
 		}
 	}
-	close(cmd)
+	sort_close(cmd, "the relation dump")
 }
 
 function dump_value(v) {
 	return substr(v, 1, 1) text_quote(value_decode(substr(v, 3)))
 }
 
-# ----------------------------------------------------------------- stages ---
-# The last stub, replaced by its milestone: M6 repl.
+# ------------------------------------------------------------------ repl ---
+#
+# spec §59: one statement a line plus the dot commands, read from STDIN
+# (/dev/stdin unless AWKLOG_STDIN redirects it), with no readline dependency
+# -- line editing is whatever the terminal already provides.
+#
+# v1 accepts queries and dot commands only.  Asserting a fact or a rule would
+# mean re-stratifying and re-evaluating everything (spec §89, PLAN.md section
+# 10), so a session cannot change the model: each statement is parsed,
+# checked, answered and then forgotten, and .stats and .dump go on describing
+# the program that was loaded.
+#
+# A bad statement must not end the session, which makes this the one place
+# die() may not exit -- see the repl_catch path there.
 
-function repl() { }
+function repl(   line, n) {
+	if (!opt_interactive)
+		return
+	# -n silences the program's own queries; silencing the ones typed at
+	# the prompt would leave nothing to interact with.
+	opt_quiet = 0
+	for (;;) {
+		# The previous statement's rows, before the next prompt.  awk
+		# block-buffers stdout when it is not a terminal, and a session
+		# driven down a pipe -- awklog -i prog.dl | tee log, with the
+		# terminal still on stdin -- would otherwise answer nothing
+		# until it ended.
+		fflush()
+		# The prompt goes to stderr with everything else the REPL says
+		# about itself: stdout carries rows, and a session whose rows
+		# are redirected to a file must not write prompts into it.
+		# STDERR is flushed only here, where the prompt has just opened
+		# it for writing; asking awk to flush a file it never opened is
+		# not portable.
+		if (PROMPT != "") {
+			printf "%s", PROMPT > STDERR
+			fflush(STDERR)
+		}
+		n = (getline line < STDIN)
+		if (n < 0)
+			die("", "cannot read " STDIN)
+		if (n == 0) {
+			# End the line the prompt started: at end of input the
+			# user pressed Ctrl-D on it rather than Enter, so the
+			# shell's own prompt would land on it.  .quit needs
+			# nothing -- its Enter ended the line already.
+			if (PROMPT != "")
+				print "" > STDERR
+			break
+		}
+		# Every line read, not every statement parsed, so that a
+		# diagnostic's <stdin>:N counts the same lines the user typed.
+		repl_lines++
+		if (!repl_line(line))
+			break
+	}
+	fflush()
+	# STDIN is deliberately left open.  There is nothing after this to
+	# reopen it for, and mawk 1.3.4 segfaults on close("/dev/stdin") once
+	# getline has read from it -- measured on 20260302, and reproducible in
+	# four lines outside awklog.
+}
+
+# Returns 0 to end the session.  A blank line is not an error, and a line of
+# comment lexes to no statement at all, so neither needs a case here.
+function repl_line(line,   cmd) {
+	cmd = line
+	# \r as well as blanks, because lex_skip_space() counts it as
+	# whitespace: without it a session piped from a CRLF file would parse
+	# its queries and then fail to recognise a single dot command, .quit
+	# included, and run on past the end of what was typed.
+	sub(/^[ \t\r]+/, "", cmd)
+	sub(/[ \t\r]+$/, "", cmd)
+	if (cmd == "")
+		return 1
+	# The statement goes on untrimmed: the lexer counts columns from the
+	# start of what the user typed, and a diagnostic that pointed into a
+	# trimmed copy would point at the wrong byte of an indented line.
+	if (substr(cmd, 1, 1) != ".") {
+		repl_query(line)
+		return 1
+	}
+	if (cmd == ".quit")
+		return 0
+	if (cmd == ".help")
+		repl_help()
+	else if (cmd == ".stats")
+		print_stats()
+	else if (cmd == ".dump")
+		dump_relations()
+	else
+		note("unknown command " cmd "; try .help")
+	return 1
+}
+
+# Help and statistics are diagnostics and go where -v's go, to stderr; query
+# rows and .dump are data and go to stdout.  On a terminal both land in front
+# of the user, and a piped session still has a clean stdout.  .dump is left
+# out of the list on purpose: it exists for the differential harness
+# (PLAN.md section 12), not for users.
+function repl_help() {
+	note("one query a line, e.g. path(a, X)? -- facts and rules are " \
+		"not accepted here")
+	note("commands: .help  .stats  .quit")
+}
+
+# One line of input, which may hold several queries.  The parse covers the
+# whole line before anything runs, so a syntax error anywhere on it drops the
+# lot, the way a batch run drops a program.  The later checks do not: safety
+# and evaluation happen per query, so an unsafe or badly typed second query
+# is reported after the first has already answered.  Hoisting the safety pass
+# over the line would match check_program() exactly, and is not worth the
+# code at this size -- the diagnostic names its line and column either way.
+#
+# Rules accumulate rather
+# than being rolled back: rule_new() does not clear rule_var_slot, so handing
+# a later statement an earlier statement's index would hand it that
+# statement's variables too.  Predicates are rolled back, because a name that
+# only a mistyped query ever mentioned has no business turning up in the next
+# .stats or .dump.
+#
+# So a session's footprint grows with the number of statements typed at it:
+# one source line and one rule's term and variable entries each, a few
+# hundred bytes, never reclaimed.  Left alone in v1 rather than half-fixed --
+# reclaiming the rule means clearing its rule_var_slot entries by name first,
+# and the source line has to outlive the parse that reads it -- and recorded
+# in PLAN.md section 15 so the cost is a known one rather than a surprise.
+function repl_query(line,   pmark, qmark, smark, q, r) {
+	pmark = pred_n
+	qmark = query_n
+	# join() counts a query's scans as it counts a rule's, and .stats
+	# describes the program that was loaded; without this a -v reader
+	# sizing that program would be reading their own typing back.
+	smark = stat_tuple_scans
+	parse_fatal = 0
+	repl_catch = 1
+	# Labelled apart from the program even when both arrive on standard
+	# input, which AWKLOG_STDIN makes possible: two diagnostics numbering
+	# their own lines from 1 must not both say <stdin>:3.
+	source_add_line("<repl>", repl_lines, line)
+	lex_start(src_n)
+	parse_program(1)
+	for (q = qmark + 1; q <= query_n && !parse_fatal; q++) {
+		r = query_rule[q]
+		# Safety first and alone: a batch run checks every rule before
+		# it warns about anything, so a rejected statement should not
+		# start naming the predicates it got wrong either.
+		check_rule_safety(r)
+		if (parse_fatal)
+			break
+		check_undefined_rule(r)
+		if (q > qmark + 1)
+			query_print("")
+		query_run(r)
+	}
+	# A run-time error inside query_run() left this set to unwind the
+	# join; the next statement starts from a clean scan.
+	join_stop = 0
+	repl_catch = 0
+	query_n = qmark
+	stat_tuple_scans = smark
+	repl_forget_preds(pmark)
+}
+
+# Predicates the statement invented, undone.  Every table keyed by predicate
+# id has to go, not just the name lookup: ids are handed out in sequence and
+# the next statement will be given these again, so a leftover pred_undefined
+# would silence a warning that belongs to a different predicate entirely.
+function repl_forget_preds(mark,   p) {
+	for (p = pred_n; p > mark; p--) {
+		# Only a predicate that reached check_undefined_rule() was
+		# counted; a statement that died in the parser invents names
+		# without ever warning about them.
+		if (p in pred_undefined)
+			stat_undefined--
+		delete pred_id[pred_name[p] SUBSEP pred_arity[p]]
+		delete pred_name[p]
+		delete pred_arity[p]
+		delete pred_tuple_count[p]
+		delete pred_undefined[p]
+		delete stratum[p]
+		# Nothing a query can parse sets these two -- parse_statement()
+		# records a definition only after accepting the statement -- but
+		# the rollback stays total, so that stays true by construction
+		# rather than by inspection.
+		delete pred_has_fact[p]
+		delete pred_has_rule[p]
+	}
+	pred_n = mark
+}
 
 # ------------------------------------------------------------ statistics ---
 

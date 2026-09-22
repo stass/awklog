@@ -1,0 +1,11 @@
+% The REPL answers queries against the model the files defined and cannot
+% change it (spec §59, §89), so the .stats it prints at the end still counts
+% the program's two predicates and none of its own queries.  Blocks are not
+% separated the way a batch run separates them: on a terminal the echo of
+% what was typed does that, and here only the two queries sharing one line
+% need a blank line between them.
+edge(a, b).
+edge(b, c).
+
+path(X, Y) :- edge(X, Y).
+path(X, Z) :- edge(X, Y), path(Y, Z).

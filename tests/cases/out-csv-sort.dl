@@ -1,0 +1,10 @@
+% -s and a csv value carrying a newline cannot both be honoured: RFC 4180
+% spells such a value across lines and sort(1) sorts lines, so the row below
+% is torn in two and its halves sort separately.  Refusing the combination
+% would cost every csv result that holds no newline, which is nearly all of
+% them, so it is allowed and diagnosed instead -- once, on the first row it
+% damages.  This case pins both the warning and the damage.
+t(1, "nl\nhere").
+t(2, plain).
+
+t(N, V)?

@@ -1,0 +1,10 @@
+% -n suppresses the rows, not the work: evaluation still runs, -v still
+% reports what it did, and stdout stays empty for a caller that wants only
+% the exit status.
+edge(a, b).
+edge(b, c).
+
+path(X, Y) :- edge(X, Y).
+path(X, Z) :- edge(X, Y), path(Y, Z).
+
+path(X, Y)?

@@ -8,6 +8,9 @@
 #
 #	NAME.dl		the program (may contain embedded queries)
 #	NAME.args	extra CLI arguments, one line	(default: none)
+#	NAME.in		stdin for the run, which -i reads	(default: /dev/null)
+#	NAME.env	sh sourced around the run, for AWKLOG_* with no option
+#	NAME.nodump	present when the case legitimately dumps no relations
 #	NAME.out	expected stdout, byte-exact	(default: empty)
 #	NAME.err	expected stderr, one pattern per line, each must match
 #	NAME.status	expected exit status		(default: 0)
@@ -101,23 +104,36 @@ run_case() {
 	base=${name##*/}
 
 	# No arguments by default: a case that prints rows pins the order the
-	# evaluator produces them in, and -s is not implemented until M6.
-	# Since M5 that order is per engine -- spec §63 leaves it unspecified
-	# and the two engines reach rows differently -- so NAME.out has to be
-	# an order both agree on.  A case that grows past the point where they
-	# do must pin one engine in NAME.args, the way eval-semi-scans and
-	# eval-naive-scans do, until -s arrives.  What the engines must always
-	# agree on is the model, and that is diff_case's job, not this one.
+	# evaluator produces them in.  Since M5 that order is per engine --
+	# spec §63 leaves it unspecified and the two engines reach rows
+	# differently -- so NAME.out has to be an order both agree on.  A case
+	# that grows past the point where they do must either pin one engine
+	# in NAME.args, the way eval-semi-scans and eval-naive-scans do, or
+	# pass -s, which since M6 sorts each query's rows and leaves the two
+	# engines nothing to disagree about.  What they must always agree on
+	# is the model, and that is diff_case's job, not this one.
 	args=
 	[ -f "$name.args" ] && args=$(cat "$name.args")
 
 	want_status=0
 	[ -f "$name.status" ] && want_status=$(cat "$name.status")
 
+	# Always redirected, so that a case without -i cannot reach for the
+	# harness's own stdin and a case with it reads only what it is given.
+	stdin=/dev/null
+	[ -f "$name.in" ] && stdin=$name.in
+
 	total=$((total + 1))
 	AWK=$awkcmd; export AWK
-	# shellcheck disable=SC2086
-	"$AWKLOG" -D "$mode" $args "$dl" > "$tmp/out" 2> "$tmp/err"
+	# NAME.env is sourced in a subshell around the run, so that a case can
+	# set an AWKLOG_* the wrapper has no option for -- AWKLOG_PROMPT above
+	# all, which the wrapper otherwise decides from whether stdin is a
+	# terminal, and a harness has none.
+	(
+		[ -f "$name.env" ] && . "$name.env"
+		# shellcheck disable=SC2086
+		exec "$AWKLOG" -D "$mode" $args "$dl"
+	) > "$tmp/out" 2> "$tmp/err" < "$stdin"
 	got_status=$?
 
 	if [ "$got_status" -ne "$want_status" ]; then
@@ -179,14 +195,23 @@ diff_case() {
 	want_status=0
 	[ -f "$name.status" ] && want_status=$(cat "$name.status")
 
+	stdin=/dev/null
+	[ -f "$name.in" ] && stdin=$name.in
+
 	total=$((total + 1))
 	AWK=$awkcmd; export AWK
 	AWKLOG_DUMP=1; export AWKLOG_DUMP
-	# shellcheck disable=SC2086
-	"$AWKLOG" $args -D semi "$dl" > "$tmp/dump.semi" 2> /dev/null
+	(
+		[ -f "$name.env" ] && . "$name.env"
+		# shellcheck disable=SC2086
+		exec "$AWKLOG" $args -D semi "$dl"
+	) > "$tmp/dump.semi" 2> /dev/null < "$stdin"
 	semi_status=$?
-	# shellcheck disable=SC2086
-	"$AWKLOG" $args -D naive "$dl" > "$tmp/dump.naive" 2> /dev/null
+	(
+		[ -f "$name.env" ] && . "$name.env"
+		# shellcheck disable=SC2086
+		exec "$AWKLOG" $args -D naive "$dl"
+	) > "$tmp/dump.naive" 2> /dev/null < "$stdin"
 	naive_status=$?
 	unset AWKLOG_DUMP
 
@@ -210,8 +235,10 @@ diff_case() {
 
 	# A run that succeeded has a model; an empty dump means the hook, not
 	# the engines, has stopped working.  -c never evaluates, so it has
-	# nothing to dump and is not asked to.
-	if [ "$want_status" -eq 0 ] && ! grep -q . "$tmp/dump.semi"; then
+	# nothing to dump and is not asked to, and a case that declares
+	# NAME.nodump has no relations to begin with.
+	if [ "$want_status" -eq 0 ] && [ ! -f "$name.nodump" ] &&
+	   ! grep -q . "$tmp/dump.semi"; then
 		case " $args " in
 		*" -c "*)	;;
 		*)	report_fail "$base" "$awkcmd" "naive/semi" \

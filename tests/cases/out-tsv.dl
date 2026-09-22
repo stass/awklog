@@ -1,0 +1,13 @@
+% tsv escapes instead of quoting, which spec §62 allows as long as the format
+% is documented: backslash, tab, newline and CR become \\, \t, \n and \r, so
+% every row is one line and every column one field.  A comma and a quote mean
+% nothing to tsv and go out untouched.
+t(1, "back\\slash").
+t(2, "tab\there").
+t(3, "nl\nhere").
+t(4, "cr\rhere").
+t(5, "comma, and \"quote\"").
+t(6, plain).
+t(7, -42).
+
+t(N, V)?

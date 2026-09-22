@@ -1,0 +1,17 @@
+% csv is RFC 4180 (spec §61): a quote is doubled, and a field is quoted when
+% it holds a comma, a quote, CR or LF, or has a leading or trailing space.
+% The type tag does not survive -- csv has no types, so row 7's symbol and
+% row 2's string are spelled alike and a reader that needs them apart wants
+% text.  Row 4 spans two lines, which is what the standard asks for and what
+% puts such a result out of -s's reach.
+t(1, "hello, world").
+t(2, "plain").
+t(3, "quote \"inside\"").
+t(4, "nl\nhere").
+t(5, "tab\there").
+t(6, " padded ").
+t(7, plain).
+t(8, "").
+t(9, -42).
+
+t(N, V)?

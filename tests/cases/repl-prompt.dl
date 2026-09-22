@@ -1,0 +1,11 @@
+% The prompt is a diagnostic and goes to stderr with the rest of what the
+% REPL says about itself, so that a session whose rows are redirected to a
+% file gets rows and nothing else.  The wrapper decides whether to print one
+% from whether stdin is a terminal; this case sets AWKLOG_PROMPT directly,
+% since a harness has no terminal to offer.
+%
+% The session ends at end of input rather than with .quit, so it also pins the
+% newline that closes the line the last prompt started -- the user pressed
+% Ctrl-D on it, and without it the shell's own prompt would land on it.
+edge(a, b).
+edge(b, c).

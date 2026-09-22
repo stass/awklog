@@ -102,7 +102,7 @@ used as a review gate — a group going 50% over its budget is a design smell:
 above. Most of the excess is four helpers the budget did not anticipate
 (`lex_skip_space`, `lex_span`, `lex_line_end`, `lex_word_kind`): they exist
 because bytes are classified with `index()` over explicit alphabets rather than
-regex ranges (§14.8) and because the EOF token carries a source location. The
+regex ranges (§14.9) and because the EOF token carries a source location. The
 budget numbers are left as they stand rather than raised to fit: at ~740 lines
 with the checker, evaluator, output and REPL still unwritten, the 1,200-line cap
 in §16 is the live risk, and M8's size trim now has a measured starting point.
@@ -165,6 +165,36 @@ request with text, and an ignored `-s` with unsorted rows. M6 replaces each
 refusal with the implementation, and `tests/run.sh` correspondingly passes no
 arguments by default rather than `-s`, so a case that prints rows pins the
 order the evaluator produces them in.
+
+**Actuals at M6** (the csv and tsv formats, `-s`, `-n`, the REPL and
+`.stats` landed): output 123 lines against 90 and query 141 against 80, both
+modest — the formats cost two quoters, and text and tsv share `escape_text`,
+which pays for one of them; the query group grew by `row_print`,
+`rows_flush` and `sort_close`, the per-query `sort(1)` pipe of §14.3 and the
+check that it ran. The REPL group is the
+one that was mis-sized rather than merely overrun: the budget's 110 lines
+cover `repl`, `repl_command`, `print_stats` and `dump_relations`, and what
+v1 actually needs is those plus `repl_query` — parse, safety-check, answer,
+forget — and `repl_forget_preds`, which is what "forget" means. Together
+they are 78 of the group's 258 lines (188 REPL, 42 dump, 28 statistics), and
+nothing else in the file could have supplied them, because nothing else has
+a reason to undo a predicate.
+
+Undoing one is the price of the rule in §10 that a session cannot change the
+model: a mistyped query still interns every name it mentions, and leaving
+those behind would have the next `.stats` and `.dump` describe the typing
+rather than the program. Predicate ids are handed out in sequence and reused
+after a rollback, so every table keyed by one is rolled back together — a
+surviving `pred_undefined` entry would silence a warning belonging to a
+different predicate. Rules are *not* rolled back for the mirror-image
+reason: `rule_new()` does not clear `rule_var_slot`, so a reused rule index
+would come with the previous statement's variables.
+
+The file is 2,191 lines, 991 over the cap. The ranking by absolute excess is
+evaluation (452 against 240), parser (273 against 180), lexer (234 against
+130) and then the REPL group (258 against 110), with the source-collection
+group now 54 lines against 20 for `args_are_stdin()`; M8 has one milestone's
+worth of code left to add and all of that to take out.
 
 ---
 
@@ -517,7 +547,58 @@ with `[ -t 0 ]` to decide whether the REPL prints a prompt.
 `.dump` (undocumented) prints every relation for differential testing. A syntax
 error inside the REPL reports and continues instead of exiting — the only place
 `die()` must not be used, so parse errors route through a `parse_fatal` flag the
-REPL can catch. v1 accepts **queries and dot-commands only**; fact/rule insertion
+REPL can catch. The catch turns `die()` into a function that *returns*, and
+every loop an error can be raised inside has to be able to leave: the lexer's
+token functions answer `EOF` from that point on, which drains every parser
+loop, but `lex_string()` scans bytes below that level and needs an explicit
+`break` at each of its three error sites — without one it re-reads the same
+byte for ever. `parse_statement()` records what a statement defines
+(`pred_has_fact`, `pred_has_rule`, `stat_rules`) only once the statement has
+been accepted, for the same reason: past a caught `die()`, execution is still
+there to reach that code, and a rejected assertion must leave nothing behind.
+
+`-c` and `-i` are refused together rather than resolved silently in `-c`'s
+favour: `-c` stops before evaluation and the REPL answers against what
+evaluation produced. `-i` on a program read from standard input is refused
+too — the program would have consumed the session before the first prompt.
+The wrapper catches the no-operand spelling and `awklog.awk` re-checks in
+`END`, reading `ARGV` rather than what arrived: an empty program arrives as
+no record at all and would arm nothing, and `-i` would then exit 0 in
+silence, which is the fault the guard exists to stop. Diagnostics still have
+to name standard input under all three of its spellings, or they read
+differently depending on the host: BWK awk leaves `FILENAME` empty, mawk and
+gawk set it to `-`, and `awklog -i /dev/stdin` names the same stream a third
+way. Both checks run after the `-c`/`-i` one, in the wrapper and in
+`awklog.awk` alike, so the two paths name the same fault first. An injected `AWKLOG_STDIN` puts the session on another
+descriptor and lifts the refusal in both places, which is what that variable
+is for; the wrapper then asks *it*, not its own stdin, whether to print a
+prompt.
+
+A line is trimmed of `\r` as well as blanks before a dot command is matched,
+because `lex_skip_space()` counts `\r` as whitespace: a session piped from a
+CRLF file would otherwise parse its queries and then recognise no command at
+all, `.quit` included, and run on past the end of what was typed.
+
+`stat_tuple_scans` is restored across a REPL statement along with the
+predicate table: `join()` counts a query's scans as it counts a rule's, and
+`.stats` is supposed to describe the program that was loaded rather than the
+typing that went after it.
+
+A line typed at the prompt is labelled `<repl>` rather than `<stdin>`, and
+numbered from 1 in its own right. The two can coexist — `AWKLOG_STDIN` puts
+the session on one descriptor while the program arrives on another — and two
+diagnostics both reading `<stdin>:3` would point at different text.
+
+The prompt goes to `STDERR`, with `.help` and `.stats` and for the same
+reason: stdout carries rows, so `awklog -i prog.dl > rows.txt` from a
+terminal gets rows and nothing else. Each round of the loop flushes stdout
+before printing the next prompt, because awk block-buffers it when it is not
+a terminal and `awklog -i prog.dl | tee log` — stdin still the terminal —
+would otherwise answer nothing until the session ended. `STDERR` is flushed
+only where the prompt has just opened it for writing; asking awk to flush a
+file it never opened is not portable. The newline that closes the last
+prompt's line belongs to the end-of-input path alone: `.quit` arrived with an
+Enter that ended the line already. v1 accepts **queries and dot-commands only**; fact/rule insertion
 is future work (spec §89) because it would require re-stratifying and
 re-evaluating.
 
@@ -559,7 +640,10 @@ exist before the semi-naive one (M5) so M5 has an oracle from day one.
 
 ```text
 NAME.dl        program (may contain embedded queries)
-NAME.args      optional extra CLI args (default: -s)
+NAME.args      optional extra CLI args (default: none)
+NAME.in        optional stdin, which -i reads (default: /dev/null)
+NAME.env       optional sh, sourced around the run (AWKLOG_* with no option)
+NAME.nodump    present when the case legitimately dumps no relations
 NAME.out       expected stdout   (byte-exact)
 NAME.err       optional expected stderr, matched as a substring/pattern
 NAME.status    optional expected exit status (default 0)
@@ -586,10 +670,19 @@ unrelated reason loses its differential coverage loudly rather than quietly.
 
 That per-engine row order is also a live constraint on `NAME.out`, which is
 compared byte-exactly against *both* engines: a case whose rows the two reach
-in different orders cannot be written that way, and must pin one engine in
-`NAME.args` (as `eval-semi-scans` and `eval-naive-scans` do) until `-s`
-arrives at M6. The engines' agreement on the model is `diff_case`'s job, not
-`NAME.out`'s.
+in different orders cannot be written that way, and must either pin one
+engine in `NAME.args` (as `eval-semi-scans` and `eval-naive-scans` do) or, in
+a case about something other than order, pass `-s`, which since M6 sorts each
+query's rows and so makes the order the same for both. The engines' agreement
+on the model is `diff_case`'s job, not `NAME.out`'s.
+
+Standard input is redirected for every case, from `NAME.in` when there is one
+and from `/dev/null` otherwise, so that a `-i` case reads only what it is
+given and a case without `-i` cannot reach the harness's own stdin. `NAME.env`
+is sourced in a subshell around the run, which is how `repl-prompt` sets
+`AWKLOG_PROMPT`: the wrapper otherwise decides the prompt from whether stdin
+is a terminal, and a harness has none to offer, so without it the prompt path
+would go untested.
 
 Coverage checklist, one case minimum each (spec §75): simple facts; single rule;
 multiple rules; recursive path; cyclic graph recursion; mutual recursion;
@@ -626,11 +719,28 @@ outside POSIX Issue 7 awk (Issue 8 adds it). Rows leave through `sort`'s
 stdout rather than awk's, so anything already printed has to be pushed out
 first or it can land after them. All four awks in the matrix have `fflush()`
 and, measured, all four also flush at the pipe without being asked — the call
-is what makes that a guarantee rather than an observation. `-s` will need the
-same at M6.
+is what makes that a guarantee rather than an observation. `-s` uses it for
+the same reason and for one more: its rows leave through `sort` while the
+blank line separating one query's block from the next leaves through awk, so
+without the flush the separator can overtake the block it separates.
+
+`close()` on the REPL's input is **not** used, and the omission is
+load-bearing: mawk 1.3.4 (20260302) segfaults on `close("/dev/stdin")` once
+`getline` has read from it, reproducibly and in four lines outside awklog.
+Nothing needs the close — the REPL is the last thing that runs — so the
+portable choice and the correct one coincide.
 
 `/dev/stderr` and `/dev/stdin` are used but are injectable
 (`AWKLOG_STDERR`, `AWKLOG_STDIN`) for hosts lacking them (spec §64).
+
+mawk's `getline < "/dev/stdin"` does not return a line until its read buffer
+fills or the stream ends, so a REPL driven through a *fifo* under mawk
+answers nothing until the writer closes. Measured, this is mawk's own
+behaviour and reproducible in one line outside awklog; on a pty — the case
+the prompt exists for — mawk answers immediately, like BWK awk and gawk. Left
+alone rather than worked around: the fix would be to read stdin in the main
+rule, which would mean the program and the session sharing one descriptor,
+which is the arrangement both the wrapper and `awklog.awk` refuse.
 
 Local matrix: BWK awk 20200816 (`/usr/bin/awk`), mawk 1.3.4, gawk 5.4.1, and
 `gawk --posix` are all installed, so `tests/run.sh` exercises the full sweep on
@@ -656,7 +766,13 @@ every run and M7 is not blocked on tooling.
 7. **Runtime type error** (not silent failure) when an ordering comparison gets a
    non-numeric operand — the spec says such comparisons are "legal only when both
    resolve to numeric" without saying what happens otherwise.
-8. **Byte classification with `index()` over explicit alphabets** in the lexer,
+8. **`-n` does not silence the REPL.** The spec gives `-n` as "suppress
+   normal output" and says nothing about `-i`; taken literally the two
+   together would leave a prompt that never answers. `-n` therefore covers
+   the program's own queries — the embedded ones and `-q` — and the REPL
+   prints regardless, which makes `-i -n` the useful combination "load
+   quietly, then ask". The `-h` text says so, and `repl-quiet` pins it.
+9. **Byte classification with `index()` over explicit alphabets** in the lexer,
    instead of scanning tokens with `match()`. POSIX `match()` takes no start
    offset, so scanning from column *n* means `substr(line, n)` — copying the
    rest of the line for every token. Measured on 20,000 facts: `match()` is
@@ -679,7 +795,11 @@ every run and M7 is not blocked on tooling.
 | Array autovivification from `if (a[k])` membership tests | use `(k in a)` everywhere; grep for `\[[^]]*\])\s*[){]` patterns in review |
 | Line budget overrun (spec §88.11) | per-group budget in §3, checked at each milestone; naive engine shares `eval_rule` |
 | `exit` semantics differing between main rule and `END` | all stages run in `END`; `die()` only called from there |
-| REPL input source clashing with a program read from stdin | `AWKLOG_STDIN` injectable; document that `-i` with a stdin program is unsupported |
+| REPL input source clashing with a program read from stdin | the wrapper refuses `-i` with no file operand outright, since the program would have consumed the session before the first prompt; `AWKLOG_STDIN` stays injectable for a caller that wants the two on different descriptors |
+| `sort(1)` missing or failing under `-s` | rows leave through its stdout, so a failed pipe would print nothing and exit 0, which a pipeline reads as "no rows matched". `rows_flush()` and `dump_relations()` check `close()` and die instead. Measured, only mawk and gawk report a failed pipe there (127); BWK awk and `gawk --posix` return 0 — but all four return 0 on success, so the check never fires wrongly and catches it where it can. The same measurement is why the check may only be applied to a pipe that was written to: `close()` of a command never opened returns −1 on all four, and a program with no predicates opens none, so `dump_relations()` returns before the pipe (`repl-dump-empty`). A status meaning SIGPIPE is exempt as well: `awklog -s f.dl \| head` kills `sort` once the reader has what it wants, and mawk and gawk report that here as 269, which taken for a failure would make an ordinary pipeline exit 1 — intermittently, since it depends on which end stops first |
+| The wrapper's prompt probe opening `AWKLOG_STDIN` | a fifo is the natural way to drive a session from another process, and opening one to ask `[ -t 0 ]` would block the wrapper until a writer arrived and then close it, leaving awk's own open with no writer. The probe runs only under `-i`, and only against a path already known to be a character device |
+| A long `-i` session growing without bound | each statement costs one source line and one rule's term and variable entries, never reclaimed: predicates are rolled back but rules are not, because `rule_new()` does not clear `rule_var_slot` and a reused index would inherit the previous statement's variables. A few hundred bytes a statement, so a session would have to run to tens of thousands of queries to matter. Recorded rather than half-fixed in v1: reclaiming a rule means deleting its `rule_var_slot` entries by name first, and the source line has to outlive the parse that reads it |
+| `-s` and a csv value containing a newline | RFC 4180 spells such a value across lines, and `sort(1)` sorts lines, so the two cannot both be honoured. Escaping the newline would stop being RFC 4180, and refusing `-s` for csv outright would cost every result that holds none, which is nearly all of them — so the combination is allowed and `row_print()` warns once, on the first row it actually damages. `out-csv-sort` pins the warning and the damage; tsv, which escapes, has no such hole |
 | A portability break slipping in between sweeps | all four awks are installed locally; `tests/run.sh` runs every case under each of them, so the sweep is continuous rather than an M7 event |
 | Deep recursion in `join` on a long rule body | depth = body length; document a practical limit and test a 12-literal body |
 | BWK awk string ops are O(length) — `substr` and passing a string to a function both cost time proportional to the whole string, at any offset (mawk and gawk are O(1)) | inherent to that awk, so any lexer is quadratic in the length of one line: 20,000 facts cost 0.5 s spread one per line but 8.3 s on a single line. Irrelevant for sources with one statement per line; documented rather than worked around, since avoiding the copy recovers only 28% and smears `src_text[lex_i]` through every call site |

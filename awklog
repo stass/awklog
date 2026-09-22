@@ -17,12 +17,12 @@ usage: $prog [-cinsv] [-D mode] [-F format] [-q query] [file ...]
 
   -c          check the program only; do not evaluate or print results
   -D mode     evaluation engine: semi (default) or naive
-  -F format   output format: text (default), csv or tsv (not implemented yet)
+  -F format   output format: text (default), csv or tsv
   -h          print this message and exit
-  -i          enter interactive mode after evaluation (not implemented yet)
-  -n          suppress query output (not implemented yet)
+  -i          enter interactive mode after evaluation; reads standard input
+  -n          suppress query output; the -i session still answers
   -q query    run a query after loading the program; repeatable
-  -s          sort each query's rows (not implemented yet)
+  -s          sort each query's rows
   -v          verbose diagnostics; repeatable
 
 With no file operands the program is read from standard input.
@@ -72,25 +72,27 @@ naive|semi)	;;
 esac
 
 case ${format:-text} in
-text)	;;
-csv|tsv)	echo "$prog: output format $format is not implemented yet" >&2
-	exit 2 ;;
+text|csv|tsv)	;;
 *)	echo "$prog: unknown output format: $format" >&2; exit 2 ;;
 esac
 
-# csv, tsv, -s, -n and -i arrive with M6.  Refusing them beats accepting and
-# ignoring them: now that queries print, an ignored -F csv or -s would answer
-# a documented request with quietly wrong output.
-if [ -n "$sort" ]; then
-	echo "$prog: -s is not implemented yet" >&2
+# -c stops before evaluation and -i answers queries against what evaluation
+# produced; accepting both and dropping the -i would answer a documented
+# request with silence.  Checked before the operand rule below, and in that
+# order in awklog.awk too, so that both paths name the same fault first.
+if [ -n "$interactive" ] && [ -n "$check" ]; then
+	echo "$prog: -c and -i cannot be combined" >&2
 	exit 2
 fi
-if [ -n "$quiet" ]; then
-	echo "$prog: -n is not implemented yet" >&2
-	exit 2
-fi
-if [ -n "$interactive" ]; then
-	echo "$prog: -i is not implemented yet" >&2
+
+# The REPL reads standard input, so a program read from there has already
+# eaten the session (PLAN.md section 15).  Refusing the combination beats
+# leaving the user at a prompt that reached EOF before it was printed --
+# unless AWKLOG_STDIN puts the session on another descriptor, which is
+# exactly what that variable is for.
+if [ -n "$interactive" ] && [ "$#" -eq 0 ] && [ -z "${AWKLOG_STDIN:-}" ]; then
+	echo "$prog: -i needs a program file, or AWKLOG_STDIN set: the REPL" \
+		"reads standard input" >&2
 	exit 2
 fi
 
@@ -134,15 +136,34 @@ AWKLOG_QUIET=$quiet
 AWKLOG_SORT=$sort
 AWKLOG_VERBOSE=$verbose
 AWKLOG_STDERR=${AWKLOG_STDERR:-/dev/stderr}
-AWKLOG_STDIN=${AWKLOG_STDIN:-/dev/stdin}
-# Prompt only when standard input is a terminal.
+# Prompt only when -i will run a session and the descriptor it reads is a
+# terminal.  Ordinarily that is this shell's stdin, asked directly.
+# AWKLOG_STDIN moves the session elsewhere, and that path is asked only when
+# it is already known to be a character device: opening a fifo here would
+# block the wrapper until a writer arrived and then close it again, leaving
+# awk's own open with no writer and the session hung -- and a fifo is the
+# natural way to drive a session from another process.
+#
+# Decided before AWKLOG_STDIN is defaulted below, so the ordinary case keeps
+# using [ -t 0 ]: on a host without /dev/stdin -- the kind of host spec §64's
+# injection exists for -- re-opening it would fail and suppress the prompt on
+# a terminal.
 if [ -z "${AWKLOG_PROMPT+set}" ]; then
-	if [ -t 0 ]; then
-		AWKLOG_PROMPT="awklog> "
-	else
-		AWKLOG_PROMPT=
+	AWKLOG_PROMPT=
+	if [ -z "$interactive" ]; then
+		: # no session, no prompt
+	elif [ -z "${AWKLOG_STDIN:-}" ]; then
+		[ -t 0 ] && AWKLOG_PROMPT="awklog> "
+	elif [ -c "$AWKLOG_STDIN" ]; then
+		# 2>/dev/null first: redirections apply left to right, and it
+		# is the failing open of a device that is not there that has
+		# to be swallowed.  Reporting that is awklog.awk's job, once,
+		# when it tries to read it.
+		[ -t 0 ] 2>/dev/null < "$AWKLOG_STDIN" &&
+			AWKLOG_PROMPT="awklog> "
 	fi
 fi
+AWKLOG_STDIN=${AWKLOG_STDIN:-/dev/stdin}
 export AWKLOG_CHECK AWKLOG_FORMAT AWKLOG_INTERACTIVE AWKLOG_MODE \
 	AWKLOG_PROMPT AWKLOG_QUERY AWKLOG_QUIET AWKLOG_SORT AWKLOG_STDERR \
 	AWKLOG_STDIN AWKLOG_VERBOSE
