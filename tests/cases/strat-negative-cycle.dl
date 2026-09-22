@@ -1,0 +1,6 @@
+% spec §12's invalid program, made safe so that stratification is what
+% rejects it rather than the safety checker.
+node(1).
+node(2).
+a(X) :- node(X), not b(X).
+b(X) :- node(X), not a(X).

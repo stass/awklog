@@ -1,0 +1,1 @@
+check-compare-symbol.dl:4:19: error: ordering comparison '<' requires numeric operands, found a symbol

@@ -1,0 +1,1 @@
+check-unsafe-negation-anon.dl:5:19: error: unsafe rule: variable '_' in 'not r/1' is not bound by a positive body literal

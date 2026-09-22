@@ -1,0 +1,5 @@
+awklog: 5 predicate(s), 3 input fact(s), 2 rule(s), 0 query(s), 2 stratum(s)
+awklog: depends/2: 1 tuple(s), stratum 0
+awklog: todo/1: 1 tuple(s), stratum 0
+awklog: blocked/1: 0 tuple(s), stratum 0
+awklog: ready/1: 0 tuple(s), stratum 1

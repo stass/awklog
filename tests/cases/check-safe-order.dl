@@ -1,0 +1,8 @@
+% Safety is order-independent (spec §33): a negated literal written before the
+% literal that binds its variable, and a comparison written before its binder,
+% are both safe because the evaluator reorders the body (spec §35).
+todo(a).
+blocked(b).
+size(a, 200).
+ready(X) :- not blocked(X), todo(X).
+big(X) :- N > 100, size(X, N).

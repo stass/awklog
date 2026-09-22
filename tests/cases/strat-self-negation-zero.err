@@ -1,0 +1,1 @@
+strat-self-negation-zero.dl:3:1: error: program contains recursion through negation: a/0

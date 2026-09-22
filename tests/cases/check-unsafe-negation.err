@@ -1,0 +1,1 @@
+check-unsafe-negation.dl:3:17: error: unsafe rule: variable 'X' in 'not blocked/1' is not bound by a positive body literal

@@ -1,0 +1,3 @@
+% An anonymous variable in the head can never be bound (spec §9, §32).
+q(1).
+p(_) :- q(X).

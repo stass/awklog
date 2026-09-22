@@ -1,0 +1,1 @@
+check-unsafe-query.dl:5:11: error: unsafe query: variable 'Y' in 'not r/1' is not bound by a positive body literal

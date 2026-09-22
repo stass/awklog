@@ -1,0 +1,7 @@
+% spec §38's bound is exactly P-1 for P predicates: four predicates chained by
+% negation reach stratum 3 and must still be accepted.  An off-by-one in the
+% bound check would reject this valid program instead.
+s0(1).
+s1(X) :- s0(X), not s0(X).
+s2(X) :- s1(X), not s1(X).
+s3(X) :- s2(X), not s2(X).

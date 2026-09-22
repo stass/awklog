@@ -107,6 +107,20 @@ budget numbers are left as they stand rather than raised to fit: at ~740 lines
 with the checker, evaluator, output and REPL still unwritten, the 1,200-line cap
 in §16 is the live risk, and M8's size trim now has a measured starting point.
 
+**Actuals at M3** (safety checks, dependency graph, stratification landed):
+checks 124 lines against 100, graph and strata 124 against 90. The checks group
+carries two things the budget did not list — the undefined-predicate warning
+of §6 and the static rejection of an ordering comparison against a non-numeric
+constant — plus `rule_noun`/`var_display`, which exist so that one diagnostic
+serves rules and queries alike. The graph group is over because naming a
+predicate that is genuinely on a negative cycle needs a second closure
+(`negative_cycle_pred`) beyond the one `recursive_p` wanted; sharing
+`closure()` between them paid back about a third of it. Total is 1,094 lines
+with the evaluator, query layer, output and REPL still to come, so the
+1,200-line cap will not survive M4–M6 as written: M8's trim is now
+load-bearing rather than cosmetic, and the lexer and parser remain the two
+groups furthest over budget in absolute lines.
+
 ---
 
 ## 4. Data representation
@@ -146,6 +160,7 @@ term_val[r, i, k]              # slot id, or encoded constant
 rule_var_n[r]; rule_var_name[r, slot]   # "" for anonymous
 rule_var_slot[r, name]
 rule_lit_line[r, i]; rule_lit_col[r, i] # for per-literal diagnostics
+rule_lit_rhs_ln[r, i]; rule_lit_rhs_col[r, i]  # comparison right operand
 rule_is_fact[r]; rule_is_query[r]       # a fact is a rule with an empty body
 query_n; query_rule[q]                  # queries in run order: source, then -q
 
@@ -246,9 +261,14 @@ error unless  vars(comparison)     ⊆ posbound(r)     # comparison safety
 ```
 
 `=` is a filter only in v1 (spec §51): both sides must be bound or constant, so it
-falls under the comparison rule with no special case. Comparisons whose operands
-are both constants are folded and checked at parse time; an ordering comparison
-between two non-numeric constants is a compile-time error.
+falls under the comparison rule with no special case. An ordering comparison is
+rejected at check time as soon as *either* operand is a non-numeric constant,
+which is stricter than rejecting only the both-constant case and is sound for
+the same reason: spec §13 makes such a comparison legal only where both
+operands resolve to numeric, and a symbol or string constant never will.
+Nothing is constant-folded — an always-true or always-false comparison between
+two constants is simply evaluated, which costs one comparison per candidate row
+and no lines of code.
 
 Queries are checked identically — a query is a rule with a synthetic head
 carrying its named variables (spec §14).
@@ -269,11 +289,25 @@ spec's iterative relaxation: repeat over all pairs, raising `stratum[p]` to
 `stratum[q]` for positive edges and to `stratum[q] + 1` for negative edges, until
 a pass makes no change. If any `stratum[p] >= pred_n`, the program has recursion
 through negation → error `file: error: program contains recursion through
-negation` (spec §38), naming one predicate on the cycle (cheap: the predicate that
-tripped the bound).
+negation` (spec §38), naming a predicate on the cycle. The predicate that
+tripped the bound is *not* that predicate: everything standing above a cycle
+climbs with it, and the higher a predicate sits the sooner it crosses, so the
+tripped one is usually innocent. `negative_cycle_pred()` instead closes the
+combined positive/negative edge set and returns the lowest-numbered `p` with a
+negative edge to some `q` that leads back to `p` — a cycle through negation by
+definition, and deterministic.
 
 Convergence is O(P³) worst case with P predicates — fine at the intended scale
 (spec §36), and it avoids an SCC implementation entirely.
+
+The relaxation computes the *minimal* stratum assignment, which is not always
+the one the spec's prose illustrates: for spec §12's example it yields
+`depends, unfinished, todo, blocked = 0` and `ready = 1`, where §12 lists
+`blocked = 1` and `ready = 2`. Both are valid stratifications — §12 says "can
+be arranged as" — and the numbering has no effect on results, since all that
+evaluation needs is that a negated predicate is complete before the stratum
+that negates it runs. `tests/cases/strat-example.dl` pins the computed
+numbering and says why it differs.
 
 **Recursive-component detection** (spec §48): transitive closure of `dep_pos`
 restricted to one stratum, then `recursive_p(p) = closure[p, p]`. This is ~15

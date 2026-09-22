@@ -1,0 +1,10 @@
+% Every predicate standing above a negative cycle climbs with it, and the
+% higher ones cross spec §38's bound first, so the diagnostic must not simply
+% name whichever predicate tripped it.  Here the cycle is a <-> b; c, d and e
+% are innocent, and e is the one that reaches the bound first.
+node(1).
+a(X) :- node(X), not b(X).
+b(X) :- node(X), not a(X).
+c(X) :- node(X), not b(X).
+d(X) :- node(X), not c(X).
+e(X) :- node(X), not d(X).

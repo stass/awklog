@@ -1,0 +1,1 @@
+check-unsafe-equality.dl:4:15: error: unsafe rule: variable 'Y' in comparison '=' is not bound by a positive body literal

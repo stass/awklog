@@ -1,0 +1,6 @@
+awklog: 5 predicate(s), 3 input fact(s), 5 rule(s), 0 query(s), 1 stratum(s)
+awklog: edge/2: 2 tuple(s), stratum 0$
+awklog: path/2: 0 tuple(s), stratum 0, recursive
+awklog: base/1: 1 tuple(s), stratum 0$
+awklog: p/1: 0 tuple(s), stratum 0, recursive
+awklog: q/1: 0 tuple(s), stratum 0, recursive

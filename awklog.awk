@@ -1,9 +1,9 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Milestone M2 (PLAN.md section 11): option decoding, source collection,
-# lexer, parser, diagnostics, the predicate and tuple tables and fact loading
-# are in place.  Checking, stratification and evaluation are still stubs,
-# filled in by M3-M6.
+# Milestone M3 (PLAN.md section 11): option decoding, source collection,
+# lexer, parser, diagnostics, the predicate and tuple tables, fact loading,
+# the safety checks, the dependency graph and stratification are in place.
+# Evaluation, queries and the REPL are still stubs, filled in by M4-M6.
 #
 # Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
 # PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),
@@ -93,6 +93,8 @@ function init() {
 	stat_input_facts = 0
 	stat_dup_facts = 0
 	stat_rules = 0
+	stat_undefined = 0
+	max_stratum = 0
 	exit_code = 0
 	dying = 0
 }
@@ -722,6 +724,11 @@ function parse_comparison(r, i, ln, col,   op) {
 	rule_lit_arity[r, i] = 2
 	rule_lit_line[r, i] = ln
 	rule_lit_col[r, i] = col
+	# Where the right operand starts, so that a type error on it points at
+	# the operand and not at the head of the whole comparison.  parse_term()
+	# consumed exactly one token, so tok_* still names it.
+	rule_lit_rhs_ln[r, i] = tok_ln
+	rule_lit_rhs_col[r, i] = tok_col
 }
 
 # Terms return through pt_kind/pt_val: 1 variable slot, 2 symbol, 3 string,
@@ -805,13 +812,257 @@ function load_facts(   r, p, n, k, name, argv) {
 	}
 }
 
+# ---------------------------------------------------------------- checks ---
+#
+# Safety is decided statically and independently of the order the body is
+# written in, because the evaluator reorders literals (spec §33, §35): the set
+# of slots a positive body literal can bind is collected over the whole body
+# first, and every other literal is then measured against it.
+
+function check_program(   r) {
+	for (r = 1; r <= rule_n; r++)
+		if (!rule_is_fact[r])
+			check_rule_safety(r)
+	check_undefined()
+}
+
+function check_rule_safety(r,   bound, i, k, kind) {
+	# posbound(r): every slot bound by a positive body literal (spec §32).
+	for (i = 1; i <= rule_body_n[r]; i++) {
+		if (rule_lit_kind[r, i] != 1)
+			continue
+		for (k = 1; k <= rule_lit_arity[r, i]; k++)
+			if (term_kind[r, i, k] == 1)
+				bound[term_val[r, i, k]] = 1
+	}
+	for (i = 1; i <= rule_body_n[r]; i++) {
+		kind = rule_lit_kind[r, i]
+		# Negation is membership on a ground tuple, so every argument
+		# must already be bound (spec §33, §50); = is a filter and not a
+		# binder in v1, so it needs no special case (spec §51).
+		if (kind == 2)
+			check_bound_terms(r, i, bound,
+				"'not " predicate_label(rule_lit_pred[r, i]) "'")
+		else if (kind == 3) {
+			check_bound_terms(r, i, bound,
+				"comparison '" rule_lit_op[r, i] "'")
+			check_compare_types(r, i)
+		}
+	}
+	check_head_safety(r, bound)
+}
+
+function check_bound_terms(r, i, bound, what,   k, s) {
+	for (k = 1; k <= rule_lit_arity[r, i]; k++) {
+		if (term_kind[r, i, k] != 1)
+			continue
+		s = term_val[r, i, k]
+		if (s in bound)
+			continue
+		die(source_where(rule_lit_line[r, i], rule_lit_col[r, i]),
+			"error: unsafe " rule_noun(r) ": variable '" var_display(r, s) \
+			"' in " what " is not bound by a positive body literal")
+	}
+}
+
+# Range restriction (spec §32).  A query's synthetic head carries its named
+# variables, which is the same rule seen from spec §14.
+function check_head_safety(r, bound,   k, s, where) {
+	where = source_where(rule_line[r], rule_col[r])
+	for (k = 1; k <= rule_head_arity[r]; k++) {
+		if (rule_head_kind[r, k] != 1)
+			continue
+		s = rule_head_val[r, k]
+		if (s in bound)
+			continue
+		if (rule_is_query[r])
+			die(where, "error: unsafe query: variable '" var_display(r, s) \
+				"' is not bound by a positive body literal")
+		die(where, "error: unsafe rule: variable '" var_display(r, s) \
+			"' in the head of " predicate_label(rule_head_pred[r]) \
+			" is not bound by a positive body literal")
+	}
+}
+
+# An ordering comparison is legal only where both operands resolve to numeric
+# (spec §13).  A symbol or string constant never will, so it is rejected here
+# rather than at run time, where the same operand would abort a query midway.
+function check_compare_types(r, i,   op, k, kind, where) {
+	op = rule_lit_op[r, i]
+	if (op == "=" || op == "!=")
+		return
+	for (k = 1; k <= 2; k++) {
+		kind = term_kind[r, i, k]
+		if (kind != 2 && kind != 3)
+			continue
+		# The literal's own location is its left operand; the right one
+		# was recorded separately so the caret lands on the offender.
+		if (k == 1)
+			where = source_where(rule_lit_line[r, i], rule_lit_col[r, i])
+		else
+			where = source_where(rule_lit_rhs_ln[r, i], rule_lit_rhs_col[r, i])
+		die(where, "error: ordering comparison '" op "' requires " \
+			"numeric operands, found " \
+			(kind == 2 ? "a symbol" : "a string literal"))
+	}
+}
+
+# A predicate with neither facts nor rules is an empty relation rather than an
+# error, so that a program whose fact file is absent still runs; the warning
+# goes to stderr, leaving stdout clean for pipelines (PLAN.md section 6).
+function check_undefined(   r, i, p) {
+	for (r = 1; r <= rule_n; r++)
+		for (i = 1; i <= rule_body_n[r]; i++) {
+			if (rule_lit_kind[r, i] == 3)
+				continue
+			p = rule_lit_pred[r, i]
+			if ((p in pred_has_fact) || (p in pred_has_rule))
+				continue
+			if (p in pred_undefined)
+				continue
+			pred_undefined[p] = 1
+			stat_undefined++
+			warn(source_where(rule_lit_line[r, i], rule_lit_col[r, i]),
+				"undefined predicate " predicate_label(p) \
+				": no facts and no rules, treated as empty")
+		}
+}
+
+function rule_noun(r) {
+	return rule_is_query[r] ? "query" : "rule"
+}
+
+function var_display(r, s) {
+	return rule_var_name[r, s] == "" ? "_" : rule_var_name[r, s]
+}
+
+# ------------------------------------------------- dependencies and strata ---
+
+# One edge per head/body-literal pair (spec §36).  Facts have no body and a
+# query has no head, so neither contributes.
+function build_deps(   r, i, p, q, kind) {
+	for (r = 1; r <= rule_n; r++) {
+		if (rule_is_fact[r] || rule_is_query[r])
+			continue
+		p = rule_head_pred[r]
+		for (i = 1; i <= rule_body_n[r]; i++) {
+			kind = rule_lit_kind[r, i]
+			if (kind == 3)
+				continue
+			q = rule_lit_pred[r, i]
+			if (kind == 1)
+				dep_pos[p, q] = 1
+			else
+				dep_neg[p, q] = 1
+		}
+	}
+}
+
+# The spec's relaxation (§37): raise stratum[p] until every positive edge
+# satisfies stratum[p] >= stratum[q] and every negative one stratum[p] >
+# stratum[q].  O(P^3) worst case, which is what §36 asks for, and it needs no
+# SCC machinery.
+function stratify(   p, q, s, changed) {
+	build_deps()
+	for (p = 1; p <= pred_n; p++)
+		stratum[p] = 0
+	max_stratum = 0
+	changed = 1
+	while (changed) {
+		changed = 0
+		for (p = 1; p <= pred_n; p++)
+			for (q = 1; q <= pred_n; q++) {
+				s = stratum[p]
+				if ((p, q) in dep_pos && s < stratum[q])
+					s = stratum[q]
+				if ((p, q) in dep_neg && s <= stratum[q])
+					s = stratum[q] + 1
+				if (s == stratum[p])
+					continue
+				# No valid stratification of P predicates
+				# needs a stratum above P-1, so passing that
+				# bound proves a cycle through negation
+				# (spec §38).
+				if (s >= pred_n)
+					stratify_fail(p)
+				stratum[p] = s
+				changed = 1
+			}
+	}
+	for (p = 1; p <= pred_n; p++)
+		if (stratum[p] > max_stratum)
+			max_stratum = stratum[p]
+	build_recursive()
+}
+
+# The predicate whose stratum crossed the bound is as often above the cycle as
+# on it -- every predicate depending on a climbing one climbs with it -- so it
+# would point the diagnostic at an innocent rule.  Name instead a predicate
+# that a negative edge really leads back into: p -> q negatively with q
+# leading back to p by any edges is a cycle through negation by definition.
+function stratify_fail(p,   c) {
+	c = negative_cycle_pred()
+	if (c > 0)
+		p = c
+	die(pred_where(p), "error: program contains recursion through negation: " \
+		predicate_label(p))
+}
+
+function negative_cycle_pred(   p, q, path) {
+	for (p = 1; p <= pred_n; p++)
+		for (q = 1; q <= pred_n; q++)
+			if (((p, q) in dep_pos) || ((p, q) in dep_neg))
+				path[p, q] = 1
+	closure(path)
+	for (p = 1; p <= pred_n; p++)
+		for (q = 1; q <= pred_n; q++)
+			if (((p, q) in dep_neg) && (p == q || ((q, p) in path)))
+				return p
+	return 0
+}
+
+# spec §48: a predicate that positively reaches itself within its own stratum
+# is what drives a fixpoint, so the rest can skip the delta loop (M5).  A
+# positive cycle lies wholly inside one stratum, so seeding with same-stratum
+# edges alone loses nothing.
+function build_recursive(   p, q) {
+	for (p = 1; p <= pred_n; p++)
+		for (q = 1; q <= pred_n; q++)
+			if (((p, q) in dep_pos) && stratum[p] == stratum[q])
+				reach[p, q] = 1
+	closure(reach)
+	for (p = 1; p <= pred_n; p++)
+		if ((p, p) in reach)
+			pred_recursive[p] = 1
+}
+
+# Transitive closure in place, over a P x P edge set.  O(P^3) is what spec §36
+# asks for at this scale, and it needs no SCC machinery; the array comes in as
+# a parameter so that both the recursive-component test and the negative-cycle
+# diagnostic can use it.
+function closure(edge,   k, p, q) {
+	for (k = 1; k <= pred_n; k++)
+		for (p = 1; p <= pred_n; p++) {
+			if (!((p, k) in edge))
+				continue
+			for (q = 1; q <= pred_n; q++)
+				if ((k, q) in edge)
+					edge[p, q] = 1
+		}
+}
+
+# Where a predicate is defined, so that a stratification error can point into
+# the source instead of naming the file alone (spec §38 shows either).
+function pred_where(p,   r) {
+	for (r = 1; r <= rule_n; r++)
+		if (!rule_is_query[r] && rule_head_pred[r] == p)
+			return source_where(rule_line[r], rule_col[r])
+	return ""
+}
+
 # --------------------------------------------------------------- stages ---
-# Each stub is replaced by its milestone: M3 check_program and stratify,
-# M4/M5 evaluate, M4 run_queries, M6 repl.
-
-function check_program() { }
-
-function stratify() { }
+# Each stub is replaced by its milestone: M4/M5 evaluate, M4 run_queries,
+# M6 repl.
 
 function evaluate() { }
 
@@ -824,13 +1075,20 @@ function repl() { }
 function print_stats(   p) {
 	note("read " stat_lines " line(s) from " stat_files " file(s)")
 	note(pred_n " predicate(s), " stat_input_facts " input fact(s), " \
-		stat_rules " rule(s), " query_n " query(s)")
+		stat_rules " rule(s), " query_n " query(s), " \
+		(max_stratum + 1) " stratum(s)")
 	if (stat_dup_facts > 0)
 		note(stat_dup_facts " duplicate fact(s) collapsed")
-	# Relation sizes are per predicate and grow with the program, so they
-	# are held back until -v -v.  Predicates come out in order of first
-	# appearance, which is stable for a given source.
+	if (stat_undefined > 0)
+		note(stat_undefined " undefined predicate(s) treated as empty")
+	# Relation sizes and strata are per predicate and grow with the program,
+	# so they are held back until -v -v.  Predicates come out in order of
+	# first appearance, which is stable for a given source.  The tuple count
+	# comes first because a relation's size is what a -v -v reader is
+	# usually after; recursive is printed only when it holds.
 	if (opt_verbose >= 2)
 		for (p = 1; p <= pred_n; p++)
-			note(predicate_label(p) ": " pred_tuple_count[p] " tuple(s)")
+			note(predicate_label(p) ": " pred_tuple_count[p] \
+				" tuple(s), stratum " stratum[p] \
+				((p in pred_recursive) ? ", recursive" : ""))
 }

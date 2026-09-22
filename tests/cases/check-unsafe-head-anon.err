@@ -1,0 +1,1 @@
+check-unsafe-head-anon.dl:3:1: error: unsafe rule: variable '_' in the head of p/1 is not bound by a positive body literal

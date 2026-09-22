@@ -1,0 +1,4 @@
+% spec §50: one bound argument is not enough, every argument must be bound.
+bar(b).
+baz(b, c).
+foo(X) :- bar(X), not baz(X, Y).

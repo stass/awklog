@@ -1,0 +1,4 @@
+% spec §51: in v1 = is a filter, never a binder, so an unbound left-hand side
+% is unsafe exactly as any other comparison would be.
+q(1).
+p(X) :- q(X), Y = foo.

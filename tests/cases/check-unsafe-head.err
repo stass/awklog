@@ -1,0 +1,1 @@
+check-unsafe-head.dl:3:1: error: unsafe rule: variable 'X' in the head of foo/1 is not bound by a positive body literal

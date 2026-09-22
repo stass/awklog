@@ -1,0 +1,1 @@
+check-compare-string.dl:3:15: error: ordering comparison '>=' requires numeric operands, found a string literal

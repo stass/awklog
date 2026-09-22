@@ -1,0 +1,9 @@
+% spec §12's stratification example.  The spec lists one valid arrangement
+% (blocked in stratum 1, ready in stratum 2); the §37 relaxation computes the
+% minimal one, which puts blocked with its positive dependencies in stratum 0.
+% What matters, and what this pins, is that ready sits strictly above blocked.
+depends(a, b).
+unfinished(b).
+todo(a).
+blocked(X) :- depends(X, Y), unfinished(Y).
+ready(X) :- todo(X), not blocked(X).

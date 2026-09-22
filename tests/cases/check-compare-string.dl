@@ -1,0 +1,3 @@
+% String ordering is deliberately omitted (spec §13).
+q(1).
+p(X) :- q(X), "a" >= X.

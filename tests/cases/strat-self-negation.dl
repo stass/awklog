@@ -1,0 +1,3 @@
+% A predicate negating itself is the shortest cycle through negation.
+node(1).
+a(X) :- node(X), not a(X).

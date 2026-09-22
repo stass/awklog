@@ -1,0 +1,2 @@
+check-undefined.dl:4:19: warning: undefined predicate r/1: no facts and no rules, treated as empty
+awklog: 1 undefined predicate(s) treated as empty

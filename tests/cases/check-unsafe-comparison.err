@@ -1,0 +1,1 @@
+check-unsafe-comparison.dl:3:25: error: unsafe rule: variable 'N' in comparison '>' is not bound by a positive body literal
