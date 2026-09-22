@@ -1,0 +1,1 @@
+eval-runtime-compare.dl:8:17: error: ordering comparison '>' requires numeric operands, found the symbol foo

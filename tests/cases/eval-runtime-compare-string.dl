@@ -1,0 +1,10 @@
+% The string half of the run-time type error: eval-runtime-compare.dl covers
+% a symbol operand, and check-compare-string.dl the static rejection of a
+% string constant, but a string reaching an ordering comparison through a
+% variable can only be caught here (spec §13).
+v(1).
+v("two").
+
+big(X) :- v(X), 0 < X.
+
+big(X)?

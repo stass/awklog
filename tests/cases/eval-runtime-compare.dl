@@ -1,0 +1,10 @@
+% An ordering comparison whose operand arrives through a variable cannot be
+% rejected statically (spec §13), so it is a located run-time error rather
+% than a silent failure indistinguishable from "no such fact"
+% (PLAN.md section 14.7).
+v(1).
+v(foo).
+
+big(X) :- v(X), X > 0.
+
+big(X)?

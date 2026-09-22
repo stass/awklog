@@ -1,0 +1,10 @@
+% join() recurses once per body literal (PLAN.md section 15), so a long body
+% is the depth test: twelve literals, past anything idiomatic.
+p(1).
+p(2).
+q(a).
+
+deep(X) :- p(X), q(A), q(B), q(C), q(D), q(E), q(F), q(G), q(H), q(I),
+	X > 1, X < 3.
+
+deep(X)?

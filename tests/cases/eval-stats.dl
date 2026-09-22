@@ -1,0 +1,9 @@
+% -v reports what evaluation did (spec §66).  Only the derived-fact count is
+% pinned here: it is a property of the least model and so is the same under
+% both engines, while the iteration and scan counts are what -D semi is meant
+% to reduce.
+edge(a, b).
+edge(b, c).
+
+path(X, Y) :- edge(X, Y).
+path(X, Z) :- edge(X, Y), path(Y, Z).

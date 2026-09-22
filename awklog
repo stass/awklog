@@ -17,12 +17,12 @@ usage: $prog [-cinsv] [-D mode] [-F format] [-q query] [file ...]
 
   -c          check the program only; do not evaluate or print results
   -D mode     evaluation engine: semi (default) or naive
-  -F format   output format: text (default), csv or tsv
+  -F format   output format: text (default), csv or tsv (not implemented yet)
   -h          print this message and exit
-  -i          enter interactive mode after evaluation
-  -n          suppress query output
+  -i          enter interactive mode after evaluation (not implemented yet)
+  -n          suppress query output (not implemented yet)
   -q query    run a query after loading the program; repeatable
-  -s          sort each query's rows
+  -s          sort each query's rows (not implemented yet)
   -v          verbose diagnostics; repeatable
 
 With no file operands the program is read from standard input.
@@ -72,9 +72,27 @@ naive|semi)	;;
 esac
 
 case ${format:-text} in
-text|csv|tsv)	;;
+text)	;;
+csv|tsv)	echo "$prog: output format $format is not implemented yet" >&2
+	exit 2 ;;
 *)	echo "$prog: unknown output format: $format" >&2; exit 2 ;;
 esac
+
+# csv, tsv, -s, -n and -i arrive with M6.  Refusing them beats accepting and
+# ignoring them: now that queries print, an ignored -F csv or -s would answer
+# a documented request with quietly wrong output.
+if [ -n "$sort" ]; then
+	echo "$prog: -s is not implemented yet" >&2
+	exit 2
+fi
+if [ -n "$quiet" ]; then
+	echo "$prog: -n is not implemented yet" >&2
+	exit 2
+fi
+if [ -n "$interactive" ]; then
+	echo "$prog: -i is not implemented yet" >&2
+	exit 2
+fi
 
 # Locate the interpreter: explicit override, then a copy next to this script
 # (so a checkout runs uninstalled), then the install-time libexec path.

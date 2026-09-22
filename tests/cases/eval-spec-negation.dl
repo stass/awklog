@@ -1,0 +1,11 @@
+% spec §80: stratified negation.
+bird(tweety).
+bird(opus).
+
+penguin(opus).
+
+flies(X) :-
+	bird(X),
+	not penguin(X).
+
+flies(X)?

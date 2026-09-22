@@ -1,0 +1,13 @@
+% spec §79: transitive dependencies -- the same closure under other names.
+depends(a, b).
+depends(b, c).
+depends(c, d).
+
+requires(X, Y) :-
+	depends(X, Y).
+
+requires(X, Z) :-
+	depends(X, Y),
+	requires(Y, Z).
+
+requires(a, X)?

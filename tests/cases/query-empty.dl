@@ -1,0 +1,12 @@
+% There is exactly one blank line between consecutive result blocks
+% (PLAN.md section 9), whether or not a block has rows, so a block that
+% matched nothing is still visible as its own gap: here the first and third
+% queries are empty and the output is "", "", "a", "", "".  Reading it any
+% other way -- for instance as "blocks are separated by a blank line only
+% where both are non-empty" -- loses which query a row came from.
+p(a).
+q(b).
+
+p(X), q(X)?
+p(X)?
+q(X), p(X)?

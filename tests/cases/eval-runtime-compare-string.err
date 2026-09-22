@@ -1,0 +1,1 @@
+eval-runtime-compare-string.dl:8:21: error: ordering comparison '<' requires numeric operands, found the string two

@@ -1,0 +1,15 @@
+% Every _ is a fresh variable (spec §9), so pair(_, _) must not force its two
+% arguments to be equal.  Anonymous variables are never projected (spec §14),
+% so a query over them answers true/false and two bindings that differ only
+% in an anonymous column collapse to one row.
+pair(a, b).
+pair(c, c).
+
+edge(a, b).
+edge(a, c).
+
+any(X) :- pair(X, _).
+
+pair(_, _)?
+edge(X, _)?
+any(X)?

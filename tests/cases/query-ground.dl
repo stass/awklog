@@ -1,0 +1,10 @@
+% A query with no named variables answers true or false (spec §15): a ground
+% atom, a zero-arity predicate, and an undefined predicate, which is an empty
+% relation rather than an error (PLAN.md section 6).
+initialized.
+edge(a, b).
+
+edge(a, b)?
+edge(a, c)?
+initialized?
+missing?

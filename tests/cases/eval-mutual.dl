@@ -1,0 +1,17 @@
+% Mutual recursion: even and odd are defined through each other, so neither
+% is complete until the stratum reaches its fixpoint.  Around a four-cycle
+% the two relations stay disjoint, which is what makes this more than a
+% termination test.
+edge(a, b).
+edge(b, c).
+edge(c, d).
+edge(d, a).
+
+start(a).
+
+even(X) :- start(X).
+odd(X) :- even(Y), edge(Y, X).
+even(X) :- odd(Y), edge(Y, X).
+
+even(X)?
+odd(X)?

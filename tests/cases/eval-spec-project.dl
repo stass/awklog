@@ -1,0 +1,25 @@
+% spec §78: the project tracker.  planner is the only card that is todo and
+% depends on nothing unfinished.
+card(parser).
+card(planner).
+card(storage).
+
+status(parser, done).
+status(planner, todo).
+status(storage, todo).
+
+depends(planner, parser).
+depends(storage, planner).
+
+unfinished(X) :-
+	status(X, todo).
+
+blocked(X) :-
+	depends(X, Y),
+	unfinished(Y).
+
+ready(X) :-
+	status(X, todo),
+	not blocked(X).
+
+ready(X)?

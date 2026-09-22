@@ -1,0 +1,21 @@
+% spec §81: three predicates over two strata, the upper one negating twice.
+node(a).
+node(b).
+node(c).
+
+edge(a, b).
+
+connected(X) :-
+	edge(X, _).
+
+isolated(X) :-
+	node(X),
+	not connected(X).
+
+interesting(X) :-
+	isolated(X),
+	not boring(X).
+
+boring(c).
+
+interesting(X)?

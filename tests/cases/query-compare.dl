@@ -1,0 +1,28 @@
+% All six comparison operators (spec §13) against the same relation, then the
+% type-distinct equality of spec §26: foo, "foo" and 42 are three different
+% values, so each of the last three queries matches exactly one of them --
+% if the types were conflated, the first two would print two rows each.
+size(a, 1).
+size(b, 5).
+size(c, 9).
+
+v(foo).
+v("foo").
+v(42).
+
+eq(X) :- size(X, N), N = 5.
+ne(X) :- size(X, N), N != 5.
+lt(X) :- size(X, N), N < 5.
+le(X) :- size(X, N), N <= 5.
+gt(X) :- size(X, N), N > 5.
+ge(X) :- size(X, N), N >= 5.
+
+eq(X)?
+ne(X)?
+lt(X)?
+le(X)?
+gt(X)?
+ge(X)?
+v(X), X = foo?
+v(X), X = "foo"?
+v(X), X = 42?

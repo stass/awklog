@@ -1,0 +1,1 @@
+query-ground.dl:10:1: warning: undefined predicate missing/0: no facts and no rules, treated as empty

@@ -1,9 +1,11 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Milestone M3 (PLAN.md section 11): option decoding, source collection,
+# Milestone M4 (PLAN.md section 11): option decoding, source collection,
 # lexer, parser, diagnostics, the predicate and tuple tables, fact loading,
-# the safety checks, the dependency graph and stratification are in place.
-# Evaluation, queries and the REPL are still stubs, filled in by M4-M6.
+# the safety checks, the dependency graph, stratification, the naive
+# evaluator, queries and text output are in place.  The semi-naive engine
+# (M5), the csv and tsv formats, -s, -n and the REPL (M6) are still to come;
+# -D semi currently runs the naive evaluator.
 #
 # Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
 # PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),
@@ -83,6 +85,20 @@ function init() {
 	if (opt_mode != "semi" && opt_mode != "naive")
 		usage_error("unknown evaluation mode: " opt_mode)
 
+	# csv, tsv, -s, -n and -i arrive with M6 (PLAN.md section 11).  Until
+	# they do they are refused rather than accepted and ignored: with M4's
+	# query output in place, accepting them would print text for -F csv,
+	# unsorted rows for -s, and rows at all for -n.  The wrapper refuses
+	# them first; this is the direct-invocation path.
+	if (opt_format != "text")
+		usage_error("output format " opt_format " is not implemented yet")
+	if (opt_sort)
+		usage_error("-s is not implemented yet")
+	if (opt_quiet)
+		usage_error("-n is not implemented yet")
+	if (opt_interactive)
+		usage_error("-i is not implemented yet")
+
 	src_n = 0
 	stat_lines = 0
 	pred_n = 0
@@ -94,7 +110,12 @@ function init() {
 	stat_dup_facts = 0
 	stat_rules = 0
 	stat_undefined = 0
+	stat_derived_facts = 0
+	stat_rule_runs = 0
+	stat_tuple_scans = 0
+	stat_iterations = 0
 	max_stratum = 0
+	join_stop = 0
 	exit_code = 0
 	dying = 0
 }
@@ -1060,13 +1081,412 @@ function pred_where(p,   r) {
 	return ""
 }
 
-# --------------------------------------------------------------- stages ---
-# Each stub is replaced by its milestone: M4/M5 evaluate, M4 run_queries,
-# M6 repl.
+# ------------------------------------------------------------ evaluation ---
+#
+# One stratum at a time, lowest first (spec §39).  A stratum's rules are
+# re-run until a pass derives nothing new, which is the naive evaluator of
+# spec §40; it stays as the correctness oracle behind -D naive, and M5 adds
+# the semi-naive delta loop on top of the same eval_rule/join/match_tuple so
+# the two engines cannot drift apart.
 
-function evaluate() { }
+function evaluate(   s) {
+	for (s = 0; s <= max_stratum; s++)
+		eval_stratum(s)
+}
 
-function run_queries() { }
+# Rules are selected by the stratum of their head, and that is what freezes
+# the lower strata while this one runs (spec §39): no rule evaluated here can
+# insert into a relation belonging anywhere else, so a negated predicate is
+# already complete by the time the stratum negating it is reached.
+function eval_stratum(s,   r) {
+	do {
+		eval_added = 0
+		stat_iterations++
+		for (r = 1; r <= rule_n; r++) {
+			if (rule_is_fact[r] || rule_is_query[r])
+				continue
+			if (stratum[rule_head_pred[r]] != s)
+				continue
+			eval_rule(r)
+		}
+	} while (eval_added)
+}
+
+function eval_rule(r,   n) {
+	stat_rule_runs++
+	n = plan_rule(r)
+	join(r, n, 1)
+}
+
+# Body order is chosen per rule invocation rather than once at parse time, so
+# the relation sizes it weighs are current (spec §35).  Order is a
+# correctness matter and not only a speed one: safety is decided over the
+# whole body regardless of the order it is written in (spec §33), so a source
+# may legally write "not penguin(X), bird(X)" and the negation has to end up
+# after the literal that binds X.
+function plan_rule(r,   n, np, i, best, best_bound, best_size, nb, size) {
+	n = rule_body_n[r]
+	array_clear(plan_done)
+	array_clear(plan_bound)
+	np = 0
+	while (np < n) {
+		# A comparison or negation whose variables are all bound binds
+		# nothing further and can only cut the search, so it is worth
+		# more than any remaining relation scan.
+		best = 0
+		for (i = 1; i <= n; i++)
+			if (!(i in plan_done) && rule_lit_kind[r, i] != 1 &&
+			    plan_ready(r, i)) {
+				best = i
+				break
+			}
+		# Otherwise the positive literal with the most arguments
+		# already bound, then the smallest relation, then the earliest
+		# in the source: a total and deterministic rule, so one
+		# program and dataset always evaluate in the same order.
+		if (best == 0) {
+			best_bound = -1
+			best_size = 0
+			for (i = 1; i <= n; i++) {
+				if ((i in plan_done) || rule_lit_kind[r, i] != 1)
+					continue
+				nb = plan_bound_count(r, i)
+				size = pred_tuple_count[rule_lit_pred[r, i]]
+				if (nb > best_bound ||
+				    (nb == best_bound && size < best_size)) {
+					best = i
+					best_bound = nb
+					best_size = size
+				}
+			}
+		}
+		# Unreachable while check_rule_safety() has run, since it
+		# leaves every comparison and negation bound by some positive
+		# literal.  The fallback keeps the plan total rather than
+		# silently dropping a filter should that ever stop holding.
+		if (best == 0)
+			for (i = 1; i <= n; i++)
+				if (!(i in plan_done)) {
+					best = i
+					break
+				}
+		np++
+		plan[np] = best
+		plan_done[best] = 1
+		plan_mark(r, best)
+	}
+	return n
+}
+
+# Only a positive literal binds, so only a positive literal marks; a
+# comparison or negation reached through the fallback above must not be
+# allowed to claim it bound anything.
+function plan_mark(r, i,   k) {
+	if (rule_lit_kind[r, i] != 1)
+		return
+	for (k = 1; k <= rule_lit_arity[r, i]; k++)
+		if (term_kind[r, i, k] == 1)
+			plan_bound[term_val[r, i, k]] = 1
+}
+
+function plan_ready(r, i,   k) {
+	for (k = 1; k <= rule_lit_arity[r, i]; k++)
+		if (term_kind[r, i, k] == 1 && !(term_val[r, i, k] in plan_bound))
+			return 0
+	return 1
+}
+
+function plan_bound_count(r, i,   k, n) {
+	n = 0
+	for (k = 1; k <= rule_lit_arity[r, i]; k++)
+		if (term_kind[r, i, k] == 1 && (term_val[r, i, k] in plan_bound))
+			n++
+	return n
+}
+
+# Recursive nested-loop join over one binding environment (PLAN.md §8.1):
+# each level binds what its literal needs, recurses, then undoes exactly its
+# own bindings.  Depth is the body length, so it stays in single digits.
+function join(r, n, pos,   i, kind, p, c, k, t) {
+	if (pos > n) {
+		if (rule_is_query[r])
+			query_emit(r)
+		else
+			emit_head(r)
+		return
+	}
+	i = plan[pos]
+	kind = rule_lit_kind[r, i]
+	if (kind == 3) {
+		if (eval_compare(r, i))
+			join(r, n, pos + 1)
+		return
+	}
+	if (kind == 2) {
+		if (eval_negation(r, i))
+			join(r, n, pos + 1)
+		return
+	}
+	p = rule_lit_pred[r, i]
+	# The relation size is read once, before the scan, because a recursive
+	# rule inserts into the very relation it is scanning: rows added while
+	# this scan runs are left to the next round, which is what bounds the
+	# loop.  Rows added earlier in the same round, by another rule or by
+	# an outer level of this one, are in and are scanned -- spec §40 says
+	# "evaluate rule against all facts", not against a frozen snapshot, so
+	# the iteration count depends on the order the rules are written in.
+	c = pred_tuple_count[p]
+	for (k = 1; k <= c; k++) {
+		t = pred_tuple[p, k]
+		stat_tuple_scans++
+		if (match_tuple(r, i, t, pos))
+			join(r, n, pos + 1)
+		unbind(pos)
+		if (join_stop)
+			return
+	}
+}
+
+# spec §30: an unbound argument takes the tuple's value, a bound one or a
+# constant must equal it.  No general unification.  Which slots this level
+# bound is recorded per depth so that unbind() can revert just those.
+function match_tuple(r, i, t, pos,   k, s, v) {
+	bound_n[pos] = 0
+	for (k = 1; k <= rule_lit_arity[r, i]; k++) {
+		v = tuple_arg[t, k]
+		if (term_kind[r, i, k] != 1) {
+			if (term_val[r, i, k] != v)
+				return 0
+			continue
+		}
+		s = term_val[r, i, k]
+		if (s in bind_has) {
+			if (bind_val[s] != v)
+				return 0
+			continue
+		}
+		bind_has[s] = 1
+		bind_val[s] = v
+		bound_n[pos]++
+		bound_at[pos, bound_n[pos]] = s
+	}
+	return 1
+}
+
+# bind_val is left behind: bind_has is what every read tests first, so one
+# delete per slot is enough.
+function unbind(pos,   j) {
+	for (j = 1; j <= bound_n[pos]; j++)
+		delete bind_has[bound_at[pos, j]]
+	bound_n[pos] = 0
+}
+
+# Every argument is bound -- spec §33 is checked statically -- so negation is
+# one membership test on the candidate key and never scans a relation
+# (spec §49).
+function eval_negation(r, i,   k, n, argv) {
+	n = rule_lit_arity[r, i]
+	for (k = 1; k <= n; k++)
+		argv[k] = lit_value(r, i, k)
+	return !(tuple_key(rule_lit_pred[r, i], n, argv) in tuple_exists)
+}
+
+# = and != compare encoded values, so foo, "foo" and 42 are three distinct
+# values (spec §26).  Ordering is numeric only (spec §13); a non-numeric
+# operand here arrived through a variable, which the static check cannot see,
+# so it is a located run-time error rather than a silent failure that would
+# be indistinguishable from "no such fact" (PLAN.md §14.7).
+function eval_compare(r, i,   op, a, b) {
+	a = lit_value(r, i, 1)
+	b = lit_value(r, i, 2)
+	op = rule_lit_op[r, i]
+	if (op == "=")
+		return a == b
+	if (op == "!=")
+		return a != b
+	if (substr(a, 1, 2) != "n:")
+		compare_type_error(r, i, 1, a)
+	if (substr(b, 1, 2) != "n:")
+		compare_type_error(r, i, 2, b)
+	a = substr(a, 3) + 0
+	b = substr(b, 3) + 0
+	if (op == "<")
+		return a < b
+	if (op == "<=")
+		return a <= b
+	if (op == ">")
+		return a > b
+	return a >= b
+}
+
+# The literal's own location is its left operand; the right one was recorded
+# separately at parse time so the caret lands on the offender.
+function compare_type_error(r, i, k, v,   where) {
+	if (k == 1)
+		where = source_where(rule_lit_line[r, i], rule_lit_col[r, i])
+	else
+		where = source_where(rule_lit_rhs_ln[r, i], rule_lit_rhs_col[r, i])
+	die(where, "error: ordering comparison '" rule_lit_op[r, i] \
+		"' requires numeric operands, found " \
+		(substr(v, 1, 1) == "s" ? "the symbol " : "the string ") \
+		format_value(v))
+}
+
+# A literal argument as the evaluator sees it: an encoded constant, or the
+# encoded value currently bound to its slot.
+function lit_value(r, i, k) {
+	if (term_kind[r, i, k] == 1)
+		return bind_val[term_val[r, i, k]]
+	return term_val[r, i, k]
+}
+
+function head_value(r, k) {
+	if (rule_head_kind[r, k] == 1)
+		return bind_val[rule_head_val[r, k]]
+	return rule_head_val[r, k]
+}
+
+# The head of a rule whose body succeeded.  Deduplication is the tuple
+# store's (spec §25), so a re-derived row costs one hash lookup and does not
+# count as progress.
+function emit_head(r,   p, n, k, argv) {
+	p = rule_head_pred[r]
+	n = rule_head_arity[r]
+	for (k = 1; k <= n; k++)
+		argv[k] = head_value(r, k)
+	tuple_add(p, n, argv)
+	if (!tuple_added)
+		return
+	eval_added++
+	stat_derived_facts++
+}
+
+# --------------------------------------------------------------- queries ---
+#
+# Queries run after the fixpoint, in source order with any -q queries last
+# (spec §52-54): a query never restricts what was materialised, there are no
+# magic sets.  A query joins exactly like a rule; only the leaf differs, in
+# emitting a row instead of inserting a tuple.
+
+function run_queries(   q) {
+	for (q = 1; q <= query_n; q++) {
+		# A blank line between blocks, so several results stay
+		# distinguishable (PLAN.md section 9).
+		if (q > 1)
+			print ""
+		query_run(query_rule[q])
+	}
+}
+
+function query_run(r,   n) {
+	array_clear(query_seen)
+	# Belt and braces: join() unbinds at every level on the way out, the
+	# ground short-circuit included, so this is already empty.  A query
+	# must not inherit a binding from anything, and M6's REPL will reach
+	# here from states this milestone cannot see.
+	array_clear(bind_has)
+	query_rows = 0
+	query_ground = (rule_head_arity[r] == 0)
+	join_stop = 0
+	n = plan_rule(r)
+	join(r, n, 1)
+	# Cleared on the way out too: a ground query leaves the flag set, and
+	# evaluation, which M6's REPL re-enters after a query, reads the same
+	# flag inside join().
+	join_stop = 0
+	# No columns means a ground query -- including one whose only
+	# variables are anonymous, since those are never projected -- and a
+	# ground query answers true or false (spec §15).
+	if (query_ground)
+		print (query_rows > 0 ? "true" : "false")
+}
+
+# Columns are the named variables in order of first appearance (spec §14).
+# Two bindings of the anonymous variables can project one row, so rows are
+# deduplicated on their encoded values rather than on the printed text: a
+# symbol and a string can print alike in text format and are still distinct.
+function query_emit(r,   k, v, key, row) {
+	query_rows++
+	if (query_ground) {
+		join_stop = 1
+		return
+	}
+	key = ""
+	row = ""
+	for (k = 1; k <= rule_head_arity[r]; k++) {
+		v = bind_val[rule_head_val[r, k]]
+		key = key SUBSEP v
+		row = (k == 1) ? format_value(v) : row " " format_value(v)
+	}
+	if (key in query_seen)
+		return
+	query_seen[key] = 1
+	print row
+}
+
+# ---------------------------------------------------------------- output ---
+#
+# Text format (spec §60): symbols and numbers bare, a string bare unless it
+# is empty or carries whitespace or a quote, in which case it is quoted with
+# the escapes of spec §7.2.  csv and tsv arrive with M6.
+
+function format_value(v,   kind, text) {
+	kind = substr(v, 1, 1)
+	text = value_decode(substr(v, 3))
+	if (kind == "q" && text_needs_quote(text))
+		return text_quote(text)
+	return text
+}
+
+# The inverse of value_escape(): \\ is a backslash, \S the SUBSEP byte.
+function value_decode(s,   out, i, c) {
+	if (index(s, "\\") == 0)
+		return s
+	out = ""
+	for (i = 1; ; i++) {
+		c = substr(s, i, 1)
+		if (c == "")
+			break
+		if (c != "\\") {
+			out = out c
+			continue
+		}
+		i++
+		c = substr(s, i, 1)
+		out = out (c == "S" ? SUBSEP : c)
+	}
+	return out
+}
+
+function text_needs_quote(s) {
+	return s == "" || index(s, " ") || index(s, "\t") || index(s, "\n") ||
+		index(s, "\r") || index(s, "\"")
+}
+
+function text_quote(s,   out, i, c) {
+	out = "\""
+	for (i = 1; ; i++) {
+		c = substr(s, i, 1)
+		if (c == "")
+			break
+		if (c == "\\")
+			out = out "\\\\"
+		else if (c == "\"")
+			out = out "\\\""
+		else if (c == "\n")
+			out = out "\\n"
+		else if (c == "\t")
+			out = out "\\t"
+		else if (c == "\r")
+			out = out "\\r"
+		else
+			out = out c
+	}
+	return out "\""
+}
+
+# ----------------------------------------------------------------- stages ---
+# The last stub, replaced by its milestone: M6 repl.
 
 function repl() { }
 
@@ -1081,6 +1501,12 @@ function print_stats(   p) {
 		note(stat_dup_facts " duplicate fact(s) collapsed")
 	if (stat_undefined > 0)
 		note(stat_undefined " undefined predicate(s) treated as empty")
+	# Only -c skips evaluation, so these would otherwise print a row of
+	# zeros that reads as a result rather than as "not run".
+	if (!opt_check)
+		note(stat_derived_facts " derived fact(s) in " stat_iterations \
+			" iteration(s), " stat_rule_runs " rule run(s), " \
+			stat_tuple_scans " tuple scan(s)")
 	# Relation sizes and strata are per predicate and grow with the program,
 	# so they are held back until -v -v.  Predicates come out in order of
 	# first appearance, which is stable for a given source.  The tuple count

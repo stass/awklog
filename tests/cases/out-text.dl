@@ -1,0 +1,17 @@
+% Text format (spec §60): symbols and numbers print bare, and a string prints
+% bare unless it is empty or carries whitespace or a quote, in which case it
+% is quoted with the escapes of spec §7.2.  A lone backslash is deliberately
+% not a quoting trigger (PLAN.md section 9), so row 8 prints bare.
+t(1, plain_symbol).
+t(2, "plain").
+t(3, "hello, world").
+t(4, "quote \"inside\"").
+t(5, "tab\there").
+t(6, "nl\nhere").
+t(7, "cr\rhere").
+t(8, "back\\slash").
+t(9, "").
+t(10, -42).
+t(11, 1000000).
+
+t(N, V)?

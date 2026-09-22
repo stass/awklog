@@ -7,7 +7,7 @@
 # Each case in tests/cases is a set of files sharing one basename:
 #
 #	NAME.dl		the program (may contain embedded queries)
-#	NAME.args	extra CLI arguments, one line	(default: -s)
+#	NAME.args	extra CLI arguments, one line	(default: none)
 #	NAME.out	expected stdout, byte-exact	(default: empty)
 #	NAME.err	expected stderr, one pattern per line, each must match
 #	NAME.status	expected exit status		(default: 0)
@@ -97,7 +97,9 @@ run_case() {
 	name=${dl%.dl}
 	base=${name##*/}
 
-	args=-s
+	# No arguments by default: a case that prints rows pins the order the
+	# evaluator produces them in, and -s is not implemented until M6.
+	args=
 	[ -f "$name.args" ] && args=$(cat "$name.args")
 
 	want_status=0

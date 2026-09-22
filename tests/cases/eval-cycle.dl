@@ -1,0 +1,10 @@
+% Recursion around a cycle terminates only because re-derived rows are
+% absorbed by the tuple store (spec §25); a is reachable from itself.
+edge(a, b).
+edge(b, c).
+edge(c, a).
+
+path(X, Y) :- edge(X, Y).
+path(X, Z) :- edge(X, Y), path(Y, Z).
+
+path(a, X)?

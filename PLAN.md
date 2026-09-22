@@ -121,6 +121,29 @@ with the evaluator, query layer, output and REPL still to come, so the
 load-bearing rather than cosmetic, and the lexer and parser remain the two
 groups furthest over budget in absolute lines.
 
+**Actuals at M4** (naive evaluator, queries and text output landed): 396 lines
+against the 340 budgeted across the three groups it fills. Query 58 against 80
+and output 61 against 90 are both under; the whole overrun sits in evaluation,
+277 lines against 170, and 86 of those are the body planner (`plan_rule` and
+its three helpers). §8.2 specifies reordering, but the budget row for the group
+lists no function for it, so that row was short by a planner from the start.
+The file is now 1,520 lines, past the 1,200 cap with M5 and M6 still to come,
+which settles what the M3 note left open: M8's trim is a required milestone
+rather than a polish, and the groups to take it from are, in absolute excess,
+the parser (253 against 180), the lexer (211 against 130), the evaluation
+planner, and the checks (124 against 100). `make count` reports the number
+but exits 0 whatever it is, so the budget is documentation and not a gate;
+M8 should make it exit non-zero outside the band, which cannot happen earlier
+without making the commit gate red by design for M4-M7.
+
+M4 also refuses `-F csv`, `-F tsv`, `-s`, `-n` and `-i` with a usage error
+instead of accepting and ignoring them. Before queries printed anything the
+difference was invisible; now an ignored `-F csv` would answer a documented
+request with text, and an ignored `-s` with unsorted rows. M6 replaces each
+refusal with the implementation, and `tests/run.sh` correspondingly passes no
+arguments by default rather than `-s`, so a case that prints rows pins the
+order the evaluator produces them in.
+
 ---
 
 ## 4. Data representation

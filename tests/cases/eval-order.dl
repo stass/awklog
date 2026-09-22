@@ -1,0 +1,15 @@
+% Safety is decided over the whole body regardless of the order it is
+% written in (spec §33), so the evaluator has to move a negation and a
+% comparison after the literals that bind their variables (spec §35).
+bird(tweety).
+bird(opus).
+penguin(opus).
+
+size(tweety, 1).
+size(opus, 9).
+
+flies(X) :- not penguin(X), bird(X).
+small(X) :- N < 5, size(X, N).
+
+flies(X)?
+small(X)?

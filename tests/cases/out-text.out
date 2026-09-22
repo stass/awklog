@@ -1,0 +1,11 @@
+1 plain_symbol
+2 plain
+3 "hello, world"
+4 "quote \"inside\""
+5 "tab\there"
+6 "nl\nhere"
+7 "cr\rhere"
+8 back\slash
+9 ""
+10 -42
+11 1000000

@@ -1,0 +1,13 @@
+% A multi-literal query projects the named variables in order of first
+% appearance (spec §14) and drops the anonymous ones, so the columns here are
+% X, Y, L and the edge(_, X) literal contributes nothing but a filter.  A
+% blank line separates one query's rows from the next, and -q queries run
+% after the embedded ones (spec §52-54).
+edge(a, b).
+edge(b, c).
+edge(c, d).
+
+label(b, beta).
+label(c, gamma).
+
+edge(X, Y), label(Y, L), edge(_, X)?
