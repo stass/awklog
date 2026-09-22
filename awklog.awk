@@ -1,13 +1,12 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Milestone M7 (PLAN.md section 11): option decoding, source collection,
-# lexer, parser, diagnostics, the predicate and tuple tables, fact loading,
-# the safety checks, the dependency graph, stratification, both evaluators --
-# the naive oracle behind -D naive and the semi-naive deltas of -D semi --
-# queries, the text, csv and tsv formats, -s and -n are in place, and
-# README.md documents them.  awklog is batch only: spec §59's interactive mode
-# is not implemented, for the reasons in PLAN.md §14.8.  The random
-# differential tests and the size trim (M8) are still to come.
+# Complete through milestone M8 (PLAN.md section 11): option decoding, source
+# collection, lexer, parser, diagnostics, the predicate and tuple tables,
+# fact loading, the safety checks, the dependency graph, stratification, both
+# evaluators -- the naive oracle behind -D naive and the semi-naive deltas of
+# -D semi -- queries, the text, csv and tsv formats, -s and -n.  README.md
+# documents them.  awklog is batch only: spec §59's interactive mode is not
+# implemented, for the reasons in PLAN.md §14.8.
 #
 # Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
 # PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),
@@ -186,16 +185,13 @@ function note(msg) {
 }
 
 # How a token is named in a diagnostic.
+# Punctuation carries no text and is named by its kind, which is its spelling.
 function token_desc(kind, text) {
 	if (kind == "EOF")
 		return "end of input"
-	if (kind == "IDENT" || kind == "VAR" || kind == "INT")
-		return "'" text "'"
 	if (kind == "STR")
 		return "a string literal"
-	if (kind == "ANON")
-		return "'_'"
-	return "'" kind "'"
+	return "'" (text != "" ? text : kind) "'"
 }
 
 # Whole-array delete is not POSIX, so every array is emptied through here.
@@ -291,8 +287,7 @@ function lex_peek() {
 function lex_skip_space(   c) {
 	while (lex_i <= src_n) {
 		# substr() past the end of a line returns "", which is how the
-		# scanner detects end of line; length() on a bare name is what
-		# the portability lint forbids.
+		# scanner detects end of line.
 		c = substr(src_text[lex_i], lex_col, 1)
 		if (c == "" || c == "%") {
 			# Remember where the source ran out, so that the EOF token
@@ -300,7 +295,7 @@ function lex_skip_space(   c) {
 			# A comment runs to the end of the line, so step over it
 			# first: pointing the caret inside it would be misleading.
 			if (c == "%")
-				lex_col = lex_line_end(src_text[lex_i], lex_col)
+				lex_col = length(src_text[lex_i]) + 1
 			lex_end_ln = lex_i
 			lex_end_col = lex_col
 			lex_i++
@@ -313,7 +308,7 @@ function lex_skip_space(   c) {
 	}
 }
 
-function lex_scan(   line, c, n, span) {
+function lex_scan(   line, c, n, span, two) {
 	lex_skip_space()
 	pk_ln = lex_i
 	pk_col = lex_col
@@ -348,42 +343,19 @@ function lex_scan(   line, c, n, span) {
 		return pk_kind = "INT"
 	}
 
-	if (c == "(" || c == ")" || c == "," || c == "." || c == "?") {
+	# Two-byte operators first, so that "<=" is not read as "<" then "=".
+	two = substr(line, lex_col, 2)
+	if (two == ":-" || two == "!=" || two == "<=" || two == ">=") {
+		lex_col += 2
+		return pk_kind = two
+	}
+	if (index("(),.?=<>", c) > 0) {
 		lex_col++
 		return pk_kind = c
 	}
-	if (c == ":") {
-		if (substr(line, lex_col + 1, 1) != "-")
-			lex_error(lex_i, lex_col, "expected ':-'")
-		lex_col += 2
-		return pk_kind = ":-"
-	}
-	if (c == "!") {
-		if (substr(line, lex_col + 1, 1) != "=")
-			lex_error(lex_i, lex_col, "expected '!='")
-		lex_col += 2
-		return pk_kind = "!="
-	}
-	if (c == "<" || c == ">") {
-		lex_col++
-		if (substr(line, lex_col, 1) == "=") {
-			lex_col++
-			return pk_kind = c "="
-		}
-		return pk_kind = c
-	}
-	if (c == "=") {
-		lex_col++
-		return pk_kind = "="
-	}
+	if (c == ":" || c == "!")
+		lex_error(lex_i, lex_col, "expected '" c (c == ":" ? "-" : "=") "'")
 	lex_error(lex_i, lex_col, "unexpected character '" c "'")
-}
-
-# The column one past the last byte of line.
-function lex_line_end(line, col) {
-	while (substr(line, col, 1) != "")
-		col++
-	return col
 }
 
 # Number of consecutive bytes of set starting at col.
@@ -933,7 +905,7 @@ function check_head_safety(r, bound,   k, s, where) {
 # An ordering comparison is legal only where both operands resolve to numeric
 # (spec §13).  A symbol or string constant never will, so it is rejected here
 # rather than at run time, where the same operand would abort a query midway.
-function check_compare_types(r, i,   op, k, kind, where) {
+function check_compare_types(r, i,   op, k, kind) {
 	op = rule_lit_op[r, i]
 	if (op == "=" || op == "!=")
 		return
@@ -941,13 +913,8 @@ function check_compare_types(r, i,   op, k, kind, where) {
 		kind = term_kind[r, i, k]
 		if (kind != 2 && kind != 3)
 			continue
-		# The literal's own location is its left operand; the right one
-		# was recorded separately so the caret lands on the offender.
-		if (k == 1)
-			where = source_where(rule_lit_line[r, i], rule_lit_col[r, i])
-		else
-			where = source_where(rule_lit_rhs_ln[r, i], rule_lit_rhs_col[r, i])
-		die(where, "error: ordering comparison '" op "' requires " \
+		die(operand_where(r, i, k),
+			"error: ordering comparison '" op "' requires " \
 			"numeric operands, found " \
 			(kind == 2 ? "a symbol" : "a string literal"))
 	}
@@ -976,6 +943,15 @@ function check_undefined(   r, i, p) {
 		}
 }
 
+# Where operand k of comparison i starts.  The literal's own location is its
+# left operand; the right one was recorded separately at parse time, so that
+# a type error's caret lands on the offender.
+function operand_where(r, i, k) {
+	if (k == 1)
+		return source_where(rule_lit_line[r, i], rule_lit_col[r, i])
+	return source_where(rule_lit_rhs_ln[r, i], rule_lit_rhs_col[r, i])
+}
+
 function rule_noun(r) {
 	return rule_is_query[r] ? "query" : "rule"
 }
@@ -987,7 +963,8 @@ function var_display(r, s) {
 # ------------------------------------------------- dependencies and strata ---
 
 # One edge per head/body-literal pair (spec §36).  Facts have no body and a
-# query has no head, so neither contributes.
+# query has no head, so neither contributes.  path[] starts as the union of
+# the two edge sets; stratify() closes it.
 function build_deps(   r, i, p, q, kind) {
 	for (r = 1; r <= rule_n; r++) {
 		if (rule_is_fact[r] || rule_is_query[r])
@@ -998,6 +975,7 @@ function build_deps(   r, i, p, q, kind) {
 			if (kind == 3)
 				continue
 			q = rule_lit_pred[r, i]
+			path[p, q] = 1
 			if (kind == 1)
 				dep_pos[p, q] = 1
 			else
@@ -1006,15 +984,27 @@ function build_deps(   r, i, p, q, kind) {
 	}
 }
 
-# The spec's relaxation (§37): raise stratum[p] until every positive edge
-# satisfies stratum[p] >= stratum[q] and every negative one stratum[p] >
-# stratum[q].  O(P^3) worst case, which is what §36 asks for, and it needs no
-# SCC machinery.
+# Recursion through negation is looked for directly, before any stratum is
+# assigned: a negative edge p -> q with q leading back to p is such a cycle by
+# definition (spec §38), and the lowest-numbered such p is a deterministic
+# predicate to name that is really on it.  (Waiting for the relaxation below
+# to overrun its bound would name whichever predicate crossed first, which is
+# as often one standing above the cycle as one on it.)
+#
+# With that ruled out, the relaxation of spec §37 converges: raise stratum[p]
+# until every positive edge satisfies stratum[p] >= stratum[q] and every
+# negative one stratum[p] > stratum[q].  O(P^3) worst case, which is what §36
+# asks for, and it needs no SCC machinery.
 function stratify(   p, q, s, changed) {
 	build_deps()
+	closure(path)
+	for (p = 1; p <= pred_n; p++)
+		for (q = 1; q <= pred_n; q++)
+			if (((p, q) in dep_neg) && ((q, p) in path))
+				die(pred_where(p), "error: program contains " \
+					"recursion through negation: " predicate_label(p))
 	for (p = 1; p <= pred_n; p++)
 		stratum[p] = 0
-	max_stratum = 0
 	changed = 1
 	while (changed) {
 		changed = 0
@@ -1027,72 +1017,30 @@ function stratify(   p, q, s, changed) {
 					s = stratum[q] + 1
 				if (s == stratum[p])
 					continue
-				# No valid stratification of P predicates
-				# needs a stratum above P-1, so passing that
-				# bound proves a cycle through negation
-				# (spec §38).
-				if (s >= pred_n)
-					stratify_fail(p)
 				stratum[p] = s
 				changed = 1
 			}
 	}
+	max_stratum = 0
 	for (p = 1; p <= pred_n; p++)
 		if (stratum[p] > max_stratum)
 			max_stratum = stratum[p]
-	build_recursive()
-}
-
-# The predicate whose stratum crossed the bound is as often above the cycle as
-# on it -- every predicate depending on a climbing one climbs with it -- so it
-# would point the diagnostic at an innocent rule.  Name instead a predicate
-# that a negative edge really leads back into: p -> q negatively with q
-# leading back to p by any edges is a cycle through negation by definition.
-function stratify_fail(p,   c) {
-	c = negative_cycle_pred()
-	if (c > 0)
-		p = c
-	die(pred_where(p), "error: program contains recursion through negation: " \
-		predicate_label(p))
-}
-
-function negative_cycle_pred(   p, q, path) {
+	# spec §48: a predicate that reaches itself.  Every cycle left is
+	# positive and so lies within one stratum, which makes the closure
+	# already taken the answer.
+	#
+	# This is reported by -v -v and is deliberately not what drives the
+	# delta loop: a rule is re-run because it reads a relation this stratum
+	# derives, recursively or not (see delta_next_pos), since
+	# reach(X) :- path(X, _) beside a recursive path has to keep firing
+	# too.  Gating on pred_recursive instead is the bug
+	# tests/cases/eval-semi-consumer.dl exists to catch.
 	for (p = 1; p <= pred_n; p++)
-		for (q = 1; q <= pred_n; q++)
-			if (((p, q) in dep_pos) || ((p, q) in dep_neg))
-				path[p, q] = 1
-	closure(path)
-	for (p = 1; p <= pred_n; p++)
-		for (q = 1; q <= pred_n; q++)
-			if (((p, q) in dep_neg) && (p == q || ((q, p) in path)))
-				return p
-	return 0
-}
-
-# spec §48: a predicate that positively reaches itself within its own
-# stratum.  A positive cycle lies wholly inside one stratum, so seeding with
-# same-stratum edges alone loses nothing.
-#
-# This is reported by -v -v and is deliberately not what drives the delta
-# loop: a rule is re-run because it reads a relation this stratum derives,
-# recursively or not (see delta_next_pos), since reach(X) :- path(X, _)
-# beside a recursive path has to keep firing too.  Gating on pred_recursive
-# instead is the bug tests/cases/eval-semi-consumer.dl exists to catch.
-function build_recursive(   p, q) {
-	for (p = 1; p <= pred_n; p++)
-		for (q = 1; q <= pred_n; q++)
-			if (((p, q) in dep_pos) && stratum[p] == stratum[q])
-				reach[p, q] = 1
-	closure(reach)
-	for (p = 1; p <= pred_n; p++)
-		if ((p, p) in reach)
+		if ((p, p) in path)
 			pred_recursive[p] = 1
 }
 
-# Transitive closure in place, over a P x P edge set.  O(P^3) is what spec §36
-# asks for at this scale, and it needs no SCC machinery; the array comes in as
-# a parameter so that both the recursive-component test and the negative-cycle
-# diagnostic can use it.
+# Transitive closure in place, over a P x P edge set (Warshall).
 function closure(edge,   k, p, q) {
 	for (k = 1; k <= pred_n; k++)
 		for (p = 1; p <= pred_n; p++) {
@@ -1135,14 +1083,10 @@ function pred_where(p,   r) {
 
 function evaluate(   s) {
 	for (s = 0; s <= max_stratum; s++)
-		eval_stratum(s)
-}
-
-function eval_stratum(s) {
-	if (opt_mode == "naive")
-		eval_naive(s)
-	else
-		eval_semi(s)
+		if (opt_mode == "naive")
+			eval_naive(s)
+		else
+			eval_semi(s)
 }
 
 # Rules are selected by the stratum of their head, and that is what freezes
@@ -1246,23 +1190,21 @@ function delta_next_pos(r, s, from,   i, p) {
 }
 
 # spec §43: the first round scans the whole of every relation delta_scanned()
-# picked out, not just what the seed pass added.  spec §42: a delta holds
-# tuple ids only, the rows themselves stay in the one tuple table.
-function delta_seed(   p, k, c) {
-	array_clear(delta_t)
-	array_clear(next_t)
-	delta_pending = 0
+# picked out, not just what the seed pass added -- so those relations are
+# staged as if a round had just derived them, and rotated in.  spec §42: a
+# delta holds tuple ids only, the rows themselves stay in the one tuple table.
+function delta_seed(   p, k) {
+	# next_t is already empty: delta_rotate() leaves it so, and nothing
+	# writes it outside a delta loop.
 	for (p = 1; p <= pred_n; p++) {
-		delta_n[p] = 0
 		next_n[p] = 0
 		if (!(p in delta_scan))
 			continue
-		c = pred_tuple_count[p]
-		for (k = 1; k <= c; k++)
-			delta_t[p, k] = pred_tuple[p, k]
-		delta_n[p] = c
-		delta_pending += c
+		for (k = 1; k <= pred_tuple_count[p]; k++)
+			next_t[p, k] = pred_tuple[p, k]
+		next_n[p] = pred_tuple_count[p]
 	}
+	delta_rotate()
 }
 
 # What a round derived becomes what the next round scans.  The rows are
@@ -1509,14 +1451,9 @@ function eval_compare(r, i,   op, a, b) {
 	return a >= b
 }
 
-# The literal's own location is its left operand; the right one was recorded
-# separately at parse time so the caret lands on the offender.
-function compare_type_error(r, i, k, v,   where) {
-	if (k == 1)
-		where = source_where(rule_lit_line[r, i], rule_lit_col[r, i])
-	else
-		where = source_where(rule_lit_rhs_ln[r, i], rule_lit_rhs_col[r, i])
-	die(where, "error: ordering comparison '" rule_lit_op[r, i] \
+function compare_type_error(r, i, k, v) {
+	die(operand_where(r, i, k),
+		"error: ordering comparison '" rule_lit_op[r, i] \
 		"' requires numeric operands, found " \
 		(substr(v, 1, 1) == "s" ? "the symbol " : "the string ") \
 		format_value(v))
@@ -1814,18 +1751,14 @@ function escape_text(s, quotes,   out, i, c) {
 # so the two do not mix: a csv result whose values carry newlines cannot be
 # sorted meaningfully by anything line-oriented, sort(1) included.  tsv
 # escapes instead of quoting and has no such hole.
-function csv_quote(s,   out, i, c) {
-	if (index(s, ",") == 0 && index(s, "\"") == 0 && index(s, "\n") == 0 &&
-	    index(s, "\r") == 0 && s !~ /^ / && s !~ / $/)
+#
+# gsub() is safe here, unlike in escape_text(): the replacement holds no
+# backslash, which is the only thing POSIX leaves undefined in one.
+function csv_quote(s) {
+	if (s !~ /[,"\n\r]|^ | $/)
 		return s
-	out = "\""
-	for (i = 1; ; i++) {
-		c = substr(s, i, 1)
-		if (c == "")
-			break
-		out = out (c == "\"" ? "\"\"" : c)
-	}
-	return out "\""
+	gsub(/"/, "\"\"", s)
+	return "\"" s "\""
 }
 
 # ------------------------------------------------------------------ dump ---
@@ -1842,28 +1775,27 @@ function csv_quote(s,   out, i, c) {
 # symbol foo, the string "foo" and the number 42 stay three distinct rows and
 # a value holding a newline stays on one line.
 
-function dump_relations(   p, k, a, t, line, cmd) {
+function dump_relations(   p, k, a, t, line) {
 	# Nothing to dump means nothing opens the pipe, and closing one that
 	# was never opened would report a failure that never happened.
 	if (pred_n == 0)
 		return
-	cmd = SORTCMD
 	# The rows reach the terminal through sort's stdout and not through
 	# awk's, so anything already printed has to be pushed out first or it
 	# could land after them.  All four target awks happen to flush at the
 	# pipe themselves, but only fflush() says so (PLAN.md section 13).
 	fflush()
 	for (p = 1; p <= pred_n; p++) {
-		print predicate_label(p) "\t#\t" pred_tuple_count[p] | cmd
+		print predicate_label(p) "\t#\t" pred_tuple_count[p] | SORTCMD
 		for (k = 1; k <= pred_tuple_count[p]; k++) {
 			t = pred_tuple[p, k]
 			line = predicate_label(p)
 			for (a = 1; a <= pred_arity[p]; a++)
 				line = line "\t" dump_value(tuple_arg[t, a])
-			print line | cmd
+			print line | SORTCMD
 		}
 	}
-	sort_close(cmd, "the relation dump")
+	sort_close(SORTCMD, "the relation dump")
 }
 
 function dump_value(v) {

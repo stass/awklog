@@ -1,0 +1,2 @@
+% A lone ":" is not an operator; the lexer names what it expected.
+p(X) :  q(X).

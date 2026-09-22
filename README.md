@@ -349,15 +349,23 @@ every case under each of these, and all pass:
 ## Development
 
 ```sh
-make test     # every case under -D semi and -D naive, under every awk found
+make test     # every case under -D semi and -D naive, under every awk found,
+              # then 25 random programs through both engines
 make sweep    # the same, but fail unless BWK awk, mawk and gawk are all installed
+make fuzz     # 500 random programs through both engines (FUZZ="count seed")
 make lint     # sh -n, awk parse check, and a grep for non-POSIX constructs
 ```
 
 Each case in `tests/cases/` is a program with its expected output. Every case
 also runs through both evaluators with the whole model dumped, and the two
 dumps must match. Some cases are symlinks into `examples/`, so that the
-commands each example lists are tested too. `spec.md` is the design
+commands each example lists are tested too. `tests/gen.awk` writes random
+safe, stratified programs — recursion, mutual recursion, negation,
+comparisons, all three value types — and `tests/fuzz.sh` runs each through
+both evaluators under every awk: the dumps must match between the engines and
+between the awks. A failure names its seed, and the generator carries its own
+random number generator, so `awk -v seed=N -f tests/gen.awk` rebuilds the same
+program under any awk. `spec.md` is the design
 specification and `PLAN.md` the implementation plan.
 
 ## License

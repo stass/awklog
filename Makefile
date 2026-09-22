@@ -6,15 +6,25 @@ LIBEXECDIR?=	$(PREFIX)/libexec
 INSTALL?=	install
 
 all:
-	@echo "nothing to build; try: make test, make install, make lint, make count"
+	@echo "nothing to build; try: make test, make fuzz, make install, make lint, make count"
 
+# The cases, then a short random differential run (PLAN.md section 12), so
+# that the two engines are compared on programs nobody wrote on every run.
 test:
 	sh tests/run.sh
+	sh tests/fuzz.sh 25
 
 # The portability sweep of PLAN.md section 11 (M7): make test, but an error
 # rather than a warning when any of BWK awk, mawk or gawk is missing.
 sweep:
 	SWEEP=1 sh tests/run.sh
+	SWEEP=1 sh tests/fuzz.sh 25
+
+# M8's exit criterion: 500 generated programs, zero naive/semi divergence.
+# FUZZ="count first-seed" picks another range.
+FUZZ?=	500 1
+fuzz:
+	sh tests/fuzz.sh $(FUZZ)
 
 # The installed wrapper cannot find awklog.awk beside itself, so its default
 # libexec path is rewritten to this install's LIBEXECDIR (spec §83: resolve the
@@ -40,14 +50,17 @@ uninstall:
 # Portability gate: constructs forbidden by PLAN.md section 13.
 lint:
 	@sh -n awklog && echo "awklog: sh syntax ok"
-	@sh -n tests/run.sh && echo "tests/run.sh: sh syntax ok"
+	@for f in tests/run.sh tests/fuzz.sh tests/awks.sh; do \
+		sh -n $$f && echo "$$f: sh syntax ok" || exit 1; done
 	@awk -f awklog.awk /dev/null && echo "awklog.awk: parses"
-	@awk '{ if ($$0 ~ /^[ \t]*#/) print ""; else print }' awklog.awk | \
-	if grep -n -E 'asorti?\(|gensub\(|PROCINFO|@namespace|typeof\(|switch *\(|length\([A-Za-z_][A-Za-z_0-9]*\)|\\s'; then \
-		echo "lint: forbidden construct above" >&2; exit 1; \
-	else echo "awklog.awk: no forbidden constructs"; fi
+	@awk -f tests/gen.awk > /dev/null && echo "tests/gen.awk: parses"
+	@for f in awklog.awk tests/gen.awk; do \
+		awk '{ if ($$0 ~ /^[ \t]*#/) print ""; else print }' $$f | \
+		if grep -n -E 'asorti?\(|gensub\(|PROCINFO|@namespace|typeof\(|switch *\(|length\([A-Za-z_][A-Za-z_0-9]*\)|\\s'; then \
+			echo "lint: forbidden construct above in $$f" >&2; exit 1; \
+		else echo "$$f: no forbidden constructs"; fi || exit 1; done
 
 count:
-	@awk 'END { print NR " lines in awklog.awk (budget 700-1200)" }' awklog.awk
+	@awk 'END { print NR " lines in awklog.awk (spec target 700-1200; see PLAN.md section 3)" }' awklog.awk
 
-.PHONY: all test sweep install uninstall lint count
+.PHONY: all test sweep fuzz install uninstall lint count

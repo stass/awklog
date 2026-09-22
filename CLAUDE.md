@@ -34,11 +34,13 @@ covers and what was tested, e.g. `M2: predicate and tuple tables`.
 ## Commands
 
 ```sh
-make test                 # tests/run.sh: every case x {semi, naive} x every awk found
+make test                 # tests/run.sh: every case x {semi, naive} x every awk found,
+                          # then tests/fuzz.sh on 25 generated programs
 make sweep                # the same, but exit 2 unless all four awks are found
+make fuzz                 # tests/fuzz.sh: 500 generated programs, naive vs semi vs awks
 sh tests/run.sh NAME      # one case; VERBOSE=1 to list passes
 make lint                 # sh -n, awk parse check, forbidden-construct grep
-make count                # line count against the 700-1200 budget
+make count                # line count (informational; see PLAN.md section 3)
 ./awklog -c -v file.dl    # check only, verbose diagnostics
 ```
 
@@ -62,8 +64,10 @@ and `tests/run.sh` runs every case under each of them, so the sweep is continuou
   validation; `awklog.awk` re-validates and also accepts `-v awklog_*` for direct use.
 - **Everything runs in `END`.** Only option decoding lives in `BEGIN`; `die()` is only
   safe from `END`, and the `dying` flag covers the `BEGIN` path.
-- **Line budget** 700–1,200 lines for `awklog.awk`, with per-group budgets in
-  `PLAN.md` section 3. Readable code, no golf (spec §87).
+- **Line budget** is a guide, not a gate: spec §88.11 says ~700–1,200 lines, the
+  file is past that, and the decision at M8 was not to cut lines for their own
+  sake — only to take a simplification where one is real (`PLAN.md` section 3).
+  Readable code, no golf (spec §87).
 - Tests and the wrapper are POSIX `sh`, no bashisms. `LC_ALL=C` for byte-deterministic
   ordering.
 

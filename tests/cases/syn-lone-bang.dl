@@ -1,0 +1,3 @@
+% "!" alone is not an operator either: only "!=" is.
+q(1).
+p(X) :- q(X), X ! 2.

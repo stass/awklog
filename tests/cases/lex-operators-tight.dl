@@ -1,0 +1,16 @@
+% Every comparison operator written without surrounding spaces: the two-byte
+% operators have to be taken whole, so X<=Y is not X < = Y, and :- with no
+% space around it is still one token.
+n(1). n(2).
+lt(X,Y):-n(X),n(Y),X<Y.
+le(X,Y):-n(X),n(Y),X<=Y.
+gt(X,Y):-n(X),n(Y),X>Y.
+ge(X,Y):-n(X),n(Y),X>=Y.
+eq(X,Y):-n(X),n(Y),X=Y.
+ne(X,Y):-n(X),n(Y),X!=Y.
+lt(X,Y)?
+le(X,Y)?
+gt(X,Y)?
+ge(X,Y)?
+eq(X,Y)?
+ne(X,Y)?
