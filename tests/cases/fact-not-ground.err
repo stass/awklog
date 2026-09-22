@@ -1,0 +1,1 @@
+fact-not-ground.dl:3:1: error: a fact must be ground: edge/2 contains variable 'X'

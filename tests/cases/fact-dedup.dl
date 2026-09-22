@@ -1,0 +1,11 @@
+% Duplicate facts have no semantic effect (spec §5.1, §25), and the type tag of
+% spec §26 keeps foo, "foo", 42 and "42" four distinct values.
+edge(a, b).
+edge(a, b).
+edge(b, c).
+initialized.
+initialized.
+v(foo).
+v("foo").
+v(42).
+v("42").

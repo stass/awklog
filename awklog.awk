@@ -1,8 +1,9 @@
 # awklog -- a tiny stratified Datalog interpreter in portable AWK.
 #
-# Milestone M1 (PLAN.md section 11): option decoding, source collection,
-# lexer, parser and diagnostics are in place.  Checking, stratification and
-# evaluation are still stubs, filled in by M2-M6.
+# Milestone M2 (PLAN.md section 11): option decoding, source collection,
+# lexer, parser, diagnostics, the predicate and tuple tables and fact loading
+# are in place.  Checking, stratification and evaluation are still stubs,
+# filled in by M3-M6.
 #
 # Portability (PLAN.md section 13): POSIX awk only.  No gensub, asort/asorti,
 # PROCINFO, arrays of arrays, switch, typeof, indirect calls, length(array),
@@ -32,6 +33,7 @@ END {
 	if (dying)
 		exit exit_code
 	parse_all()
+	load_facts()
 	check_program()
 	stratify()
 	if (!opt_check) {
@@ -47,8 +49,10 @@ END {
 # ---------------------------------------------------------------- options ---
 
 function init() {
-	# Keep number->string conversion exact everywhere: the default CONVFMT
-	# of "%.6g" would turn 1000000 into 1e+06 inside tuple keys.
+	# Belt and braces only: POSIX converts an integral value with %d and
+	# consults CONVFMT just for the rest, and v1 has no non-integral values
+	# to reach it.  Measured under CONVFMT="%.6g", all four awks render
+	# 1000000 and 100000000000000000 as digits (PLAN.md section 4).
 	CONVFMT = "%.17g"
 	OFMT = "%.17g"
 	SUBSEP = sprintf("%c", 28)
@@ -82,10 +86,12 @@ function init() {
 	src_n = 0
 	stat_lines = 0
 	pred_n = 0
+	tuple_n = 0
 	rule_n = 0
 	query_n = 0
 	stat_files = 0
 	stat_input_facts = 0
+	stat_dup_facts = 0
 	stat_rules = 0
 	exit_code = 0
 	dying = 0
@@ -416,6 +422,12 @@ function predicate_get(name, arity,   key) {
 	pred_id[key] = pred_n
 	pred_name[pred_n] = name
 	pred_arity[pred_n] = arity
+	# Seeded because every relation scan reads it and reading an absent
+	# element would create it (PLAN.md section 15).  pred_has_fact and
+	# pred_has_rule are deliberately left absent instead: seeding them would
+	# make (p in pred_has_rule) true for every predicate, and that test is
+	# how the stratifier will ask whether a predicate has a definition.
+	pred_tuple_count[pred_n] = 0
 	return pred_n
 }
 
@@ -452,12 +464,60 @@ function value_escape(s,   out, c, i) {
 	return out
 }
 
-# "" v would use CONVFMT and render 1000000 as 1e+06; integers that a double
-# holds exactly go through %d instead (PLAN.md section 4).
+# The encoded spelling of a number is built explicitly rather than left to the
+# host's number->string rule: below 2^53 %d is exact, and above it a host's %d
+# may convert through an integer type too narrow to hold the value, so those go
+# through %.17g, which round-trips a double (PLAN.md section 4, spec §7.3).
 function number_text(v) {
 	if (v == int(v) && v < 9007199254740992 && v > -9007199254740992)
 		return sprintf("%d", v)
 	return sprintf("%.17g", v)
+}
+
+# ----------------------------------------------------------- tuple store ---
+#
+# A tuple is one ground row of a relation (spec §24).  Rows are interned under
+#
+#	predicate-id SUBSEP encoded-arg-1 SUBSEP ... SUBSEP encoded-arg-n
+#
+# so re-deriving a row is one hash lookup and set semantics fall out of the
+# array (spec §25).  That key is injective only because value_encode() escapes
+# SUBSEP and the backslash inside constants: otherwise the two rows
+#
+#	p("x" SUBSEP "q:y", "z")	p("x", "y" SUBSEP "q:z")
+#
+# would spell the same key and the second would vanish as a duplicate.
+#
+# Arguments arrive in an array rather than one packed string because a caller
+# usually has them in separate places already (head terms here, bindings in the
+# evaluator), and packing them twice would cost a scan per candidate row.
+
+function tuple_key(p, n, argv,   key, k) {
+	key = p
+	for (k = 1; k <= n; k++)
+		key = key SUBSEP argv[k]
+	return key
+}
+
+# Interns argv[1..n] as a row of predicate p and returns its tuple id.  Whether
+# the row was new is reported through the global tuple_added, since an awk
+# function returns one scalar.
+function tuple_add(p, n, argv,   key, t, k) {
+	key = tuple_key(p, n, argv)
+	if (key in tuple_exists) {
+		tuple_added = 0
+		return tuple_exists[key]
+	}
+	tuple_n++
+	t = tuple_n
+	tuple_exists[key] = t
+	tuple_pred[t] = p
+	for (k = 1; k <= n; k++)
+		tuple_arg[t, k] = argv[k]
+	pred_tuple_count[p]++
+	pred_tuple[p, pred_tuple_count[p]] = t
+	tuple_added = 1
+	return t
 }
 
 # ---------------------------------------------------------------- parser ---
@@ -519,7 +579,6 @@ function parse_statement(query_only,   r, k, n) {
 		rule_body_n[r] = 0
 		rule_is_fact[r] = 1
 		pred_has_fact[rule_head_pred[r]] = 1
-		stat_input_facts++
 	} else if (k == "," || k == "?") {
 		n = 1
 		while (lex_peek() == ",") {
@@ -714,9 +773,41 @@ function expect(kind, what) {
 			", found " token_desc(tok_kind, tok_text))
 }
 
+# ---------------------------------------------------------- fact loading ---
+
+# A fact is a rule with an empty body and must be ground (spec §5.1), so it is
+# stored directly instead of being evaluated.  Loading runs before the semantic
+# checks so that -c reports the relation sizes it would really evaluate over,
+# and so that a missing-variable diagnostic names the fact that carries it.
+function load_facts(   r, p, n, k, name, argv) {
+	for (r = 1; r <= rule_n; r++) {
+		if (!rule_is_fact[r])
+			continue
+		p = rule_head_pred[r]
+		n = rule_head_arity[r]
+		for (k = 1; k <= n; k++) {
+			if (rule_head_kind[r, k] == 1) {
+				name = rule_var_name[r, rule_head_val[r, k]]
+				if (name == "")
+					name = "_"
+				die(source_where(rule_line[r], rule_col[r]),
+					"error: a fact must be ground: " \
+					predicate_label(p) " contains variable '" name "'")
+			}
+			argv[k] = rule_head_val[r, k]
+		}
+		# Stale argv entries past n are never read: the key stops at n.
+		tuple_add(p, n, argv)
+		if (tuple_added)
+			stat_input_facts++
+		else
+			stat_dup_facts++
+	}
+}
+
 # --------------------------------------------------------------- stages ---
-# Each stub is replaced by its milestone: M2 fact loading, M3 check_program
-# and stratify, M4/M5 evaluate, M4 run_queries, M6 repl.
+# Each stub is replaced by its milestone: M3 check_program and stratify,
+# M4/M5 evaluate, M4 run_queries, M6 repl.
 
 function check_program() { }
 
@@ -730,8 +821,16 @@ function repl() { }
 
 # ------------------------------------------------------------ statistics ---
 
-function print_stats() {
+function print_stats(   p) {
 	note("read " stat_lines " line(s) from " stat_files " file(s)")
 	note(pred_n " predicate(s), " stat_input_facts " input fact(s), " \
 		stat_rules " rule(s), " query_n " query(s)")
+	if (stat_dup_facts > 0)
+		note(stat_dup_facts " duplicate fact(s) collapsed")
+	# Relation sizes are per predicate and grow with the program, so they
+	# are held back until -v -v.  Predicates come out in order of first
+	# appearance, which is stable for a given source.
+	if (opt_verbose >= 2)
+		for (p = 1; p <= pred_n; p++)
+			note(predicate_label(p) ": " pred_tuple_count[p] " tuple(s)")
 }

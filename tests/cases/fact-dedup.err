@@ -1,0 +1,5 @@
+awklog: 3 predicate(s), 7 input fact(s), 0 rule(s), 0 query(s)
+awklog: 2 duplicate fact(s) collapsed
+awklog: edge/2: 2 tuple(s)
+awklog: initialized/0: 1 tuple(s)
+awklog: v/1: 4 tuple(s)

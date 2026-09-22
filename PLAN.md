@@ -163,10 +163,17 @@ compares, hashes, and stores; decoding happens only in output.
 
 Two hazards the spec does not name, both must be handled in `value_encode`:
 
-1. **Numeric stringification.** `"" x` uses `CONVFMT` and turns `1000000` into
-   `1e+06` on some awks. Always build numbers with `sprintf("%d", v)` when
-   `v == int(v) && abs(v) < 2^53`, else `sprintf("%.17g", v)`. Set
-   `CONVFMT = OFMT = "%.17g"` in `init()` as a belt-and-braces measure.
+1. **Numeric stringification.** Build numbers with `sprintf("%d", v)` when
+   `v == int(v) && abs(v) < 2^53`, else `sprintf("%.17g", v)`, because above
+   2^53 a host's `%d` may convert through an integer type that cannot hold the
+   value, while `%.17g` round-trips a double exactly. *(An earlier revision
+   justified this by `CONVFMT`: `"" x` supposedly rendering `1000000` as
+   `1e+06`. POSIX converts an integral value with `%d` and consults `CONVFMT`
+   only for the rest, and measurement agrees — under `CONVFMT = "%.6g"`, BWK
+   awk, mawk, gawk and `gawk --posix` all print `1000000` and
+   `100000000000000000` as digits. `CONVFMT = OFMT = "%.17g"` in `init()` stays
+   as belt and braces for any non-integral value that ever reaches it, but no
+   test can pin it while the language has integer literals only.)*
 2. **`SUBSEP` collisions.** Tuple keys join encoded values with `SUBSEP` (`\034`).
    A string literal containing `\034` could forge another tuple's key. In
    `value_encode`, escape `\` as `\\` and `SUBSEP` as `\S`, making key
@@ -177,8 +184,11 @@ Two hazards the spec does not name, both must be handled in `value_encode`:
 
 ### Deduplication (spec §25)
 
-`tuple_add(p, n, argv_prefix)` builds the key, returns the tuple id and sets a
-global `tuple_added` to 1/0 (AWK has no multiple return values). Membership tests
+`tuple_add(p, n, argv)` takes the encoded arguments in an array (callers have
+them in separate places — head terms at load time, bindings in the evaluator —
+so packing them into one string first would cost a scan per candidate row),
+builds the key, returns the tuple id and sets a global `tuple_added` to 1/0
+(AWK has no multiple return values). Membership tests
 always use `(key in tuple_exists)` — never `tuple_exists[key]`, which would
 autovivify and silently grow the array.
 
@@ -432,9 +442,12 @@ REPL can catch. v1 accepts **queries and dot-commands only**; fact/rule insertio
 is future work (spec §89) because it would require re-stratifying and
 re-evaluating.
 
-**Statistics** (spec §66–67): `stat_input_facts`, `stat_derived_facts`,
+**Statistics** (spec §66–67): `stat_input_facts` (distinct rows, with the
+collapsed duplicates counted separately in `stat_dup_facts`), `stat_derived_facts`,
 `stat_rules`, `stat_predicates`, `stat_rule_runs`, `stat_tuple_scans`,
-`stat_iterations`, printed only by `.stats` or `-v` (never by default).
+`stat_iterations`, printed only by `.stats` or `-v` (never by default). A second
+`-v` adds one line per predicate with its relation size, which is the only way
+to see a stratum's shape before the query layer exists.
 
 ---
 
@@ -549,7 +562,7 @@ every run and M7 is not blocked on tooling.
 
 | Risk | Mitigation |
 |---|---|
-| `CONVFMT` turning large integers into `1e+06` inside keys | `sprintf("%d", …)` in `value_encode`; explicit test with `1000000` |
+| A host spelling a large integer in exponent form inside a key | `number_text()` picks `%d` below 2^53 and `%.17g` above; the `fact-numbers` case pins both branches as injective. `CONVFMT` itself turned out not to be the hazard — see §4 |
 | `SUBSEP` byte inside a string literal forging tuple keys | escape `\` and `SUBSEP` when encoding; explicit test |
 | Array autovivification from `if (a[k])` membership tests | use `(k in a)` everywhere; grep for `\[[^]]*\])\s*[){]` patterns in review |
 | Line budget overrun (spec §88.11) | per-group budget in §3, checked at each milestone; naive engine shares `eval_rule` |

@@ -1,0 +1,3 @@
+% An anonymous variable is still a variable (spec §9), so a fact may not
+% carry one either.
+edge(a, _).

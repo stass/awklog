@@ -1,0 +1,7 @@
+% Tuple keys must be injective (PLAN.md section 4).  The first two rows below
+% differ only in which side of the argument boundary a literal SUBSEP byte
+% falls on, and the third spells the SUBSEP escape with a real backslash; with
+% either escape missing from value_encode() they collapse into one tuple.
+p("xq:y", "z").
+p("x", "yq:z").
+p("x\\Sq:y", "z").

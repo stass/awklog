@@ -1,0 +1,5 @@
+awklog: 4 predicate(s), 4 input fact(s), 0 rule(s), 0 query(s)
+awklog: foo/1: 1 tuple(s)
+awklog: foo/2: 1 tuple(s)
+awklog: foo/3: 1 tuple(s)
+awklog: bar/1: 1 tuple(s)
