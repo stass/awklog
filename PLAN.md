@@ -532,9 +532,16 @@ every run and M7 is not blocked on tooling.
    non-numeric operand — the spec says such comparisons are "legal only when both
    resolve to numeric" without saying what happens otherwise.
 8. **Byte classification with `index()` over explicit alphabets** in the lexer,
-   instead of regex ranges such as `[A-Za-z]`, whose meaning depends on the
-   collating sequence of the current locale — the wrapper only defaults `LC_ALL`
-   to `C`, it does not override a user who has set it.
+   instead of scanning tokens with `match()`. POSIX `match()` takes no start
+   offset, so scanning from column *n* means `substr(line, n)` — copying the
+   rest of the line for every token. Measured on 20,000 facts: `match()` is
+   ~18% faster and ~16 lines shorter when each fact is on its own line, but on
+   a single 300 KB line it takes 121 s under BWK awk against 8.3 s for the
+   character loop (mawk: 0.68 s against 0.26 s). The cliff is not worth the
+   lines. *(An earlier revision justified this by the locale-dependence of
+   `[A-Za-z]` ranges; that was tested under `en_US.UTF-8`, `cs_CZ.UTF-8` and
+   `da_DK.UTF-8` on all four awks and does not happen — only `[[:alpha:]]` is
+   locale-sensitive there, and nothing here uses it.)*
 
 ---
 
@@ -550,6 +557,7 @@ every run and M7 is not blocked on tooling.
 | REPL input source clashing with a program read from stdin | `AWKLOG_STDIN` injectable; document that `-i` with a stdin program is unsupported |
 | A portability break slipping in between sweeps | all four awks are installed locally; `tests/run.sh` runs every case under each of them, so the sweep is continuous rather than an M7 event |
 | Deep recursion in `join` on a long rule body | depth = body length; document a practical limit and test a 12-literal body |
+| BWK awk string ops are O(length) — `substr` and passing a string to a function both cost time proportional to the whole string, at any offset (mawk and gawk are O(1)) | inherent to that awk, so any lexer is quadratic in the length of one line: 20,000 facts cost 0.5 s spread one per line but 8.3 s on a single line. Irrelevant for sources with one statement per line; documented rather than worked around, since avoiding the copy recovers only 28% and smears `src_text[lex_i]` through every call site |
 
 ---
 

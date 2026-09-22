@@ -54,8 +54,8 @@ function init() {
 	SUBSEP = sprintf("%c", 28)
 
 	# The lexer classifies bytes with index() into these sets rather than
-	# with regex ranges such as [A-Za-z], whose meaning depends on the
-	# collating sequence of the current locale.
+	# scanning tokens with match(), which takes no start offset and so would
+	# copy the rest of the line for every token (PLAN.md §14.8).
 	UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 	LOWER = "abcdefghijklmnopqrstuvwxyz"
 	DIGITS = "0123456789"
