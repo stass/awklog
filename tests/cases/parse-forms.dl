@@ -1,0 +1,31 @@
+% Every grammar form of spec §17 must parse (milestone M1).
+
+% facts: zero-arity, symbols, strings with escapes, negative and large integers
+initialized.
+empty_args().
+edge(a, b).
+edge(b, c).
+size(parser, -42).
+size(lexer, 1000000).
+title(parser, "Rewrite \"the\" parser\n\t\r\\").
+note(a, "100% sure, comma and \"quote\"").	% a % inside a string is not a comment
+
+% rules, including one spanning several lines and a recursive one
+unfinished(X) :- status(X, todo).
+path(X, Z) :-
+	edge(X, Y),
+	path(Y, Z).
+
+% negation, all six comparisons, bare symbol and constant operands
+ready(X) :- todo(X), not blocked(X).
+cmp(X) :- size(X, N), N = 5, N != 3, N < 9, N <= 9, N > 1, N >= 0.
+mixed(X) :- size(X, N), foo = bar, "s" != 7, N >= -1.
+
+% anonymous variables: each _ is a distinct variable (spec §9)
+anon(X) :- pair(_, _), edge(X, _).
+
+% queries: ground, single, multi-literal, zero-arity
+path(a, c)?
+edge(X, Y)?
+edge(X, Y), path(Y, Z), X != Y?
+initialized?

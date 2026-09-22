@@ -1,0 +1,1 @@
+same(X) :- edge(X, Y), X Y.

@@ -1,0 +1,2 @@
+% "not" must be followed by an atom, not by a term (spec §17).
+ready(X) :- todo(X), not _.

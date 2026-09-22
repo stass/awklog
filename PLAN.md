@@ -97,6 +97,16 @@ used as a review gate — a group going 50% over its budget is a design smell:
 | Output | `print_row`, `format_value`, `csv_quote`, `tsv_escape`, `text_quote` | 90 |
 | REPL + stats | `repl`, `repl_command`, `print_stats`, `dump_relations` | 110 |
 
+**Actuals at M1** (lexer, parser and diagnostics landed): lexer 211 lines against
+130, parser 253 against 180 — both over, the lexer past the 50%-over gate stated
+above. Most of the excess is four helpers the budget did not anticipate
+(`lex_skip_space`, `lex_span`, `lex_line_end`, `lex_word_kind`): they exist
+because bytes are classified with `index()` over explicit alphabets rather than
+regex ranges (§14.8) and because the EOF token carries a source location. The
+budget numbers are left as they stand rather than raised to fit: at ~740 lines
+with the checker, evaluator, output and REPL still unwritten, the 1,200-line cap
+in §16 is the live risk, and M8's size trim now has a measured starting point.
+
 ---
 
 ## 4. Data representation
@@ -109,8 +119,10 @@ src_n; src_text[i]; src_file[i]; src_fnr[i]
 
 # lexer state (globals, not return values)
 lex_i; lex_col                 # cursor: source line index, 1-based column
-tok_kind; tok_text; tok_ln; tok_col
-tok_peeked                     # one-token pushback for lex_peek()
+lex_end_ln; lex_end_col        # where the source ran out, so EOF has a location
+tok_kind; tok_text; tok_ln; tok_col     # current token
+pk_kind; pk_text; pk_ln; pk_col         # lookahead, valid while have_peek
+have_peek
 
 # predicates
 pred_n; pred_name[p]; pred_arity[p]; pred_id[name, arity]
@@ -133,6 +145,9 @@ term_kind[r, i, k]             # 1 var(slot), 2 symbol, 3 string, 4 number
 term_val[r, i, k]              # slot id, or encoded constant
 rule_var_n[r]; rule_var_name[r, slot]   # "" for anonymous
 rule_var_slot[r, name]
+rule_lit_line[r, i]; rule_lit_col[r, i] # for per-literal diagnostics
+rule_is_fact[r]; rule_is_query[r]       # a fact is a rule with an empty body
+query_n; query_rule[q]                  # queries in run order: source, then -q
 
 # bindings (single environment, undone on backtrack — see §6)
 bind_has[slot]; bind_val[slot]
@@ -155,7 +170,10 @@ Two hazards the spec does not name, both must be handled in `value_encode`:
 2. **`SUBSEP` collisions.** Tuple keys join encoded values with `SUBSEP` (`\034`).
    A string literal containing `\034` could forge another tuple's key. In
    `value_encode`, escape `\` as `\\` and `SUBSEP` as `\S`, making key
-   construction injective. Cost: two `gsub`s per string constant, once at parse.
+   construction injective. Done with an `index`/`substr` loop, not `gsub`: POSIX
+   leaves a backslash in a `gsub` replacement outside `\&` and `\\` undefined.
+   Cost: one scan per string constant, skipped entirely when it holds neither
+   byte, and once at parse in any case.
 
 ### Deduplication (spec §25)
 
@@ -513,6 +531,10 @@ every run and M7 is not blocked on tooling.
 7. **Runtime type error** (not silent failure) when an ordering comparison gets a
    non-numeric operand — the spec says such comparisons are "legal only when both
    resolve to numeric" without saying what happens otherwise.
+8. **Byte classification with `index()` over explicit alphabets** in the lexer,
+   instead of regex ranges such as `[A-Za-z]`, whose meaning depends on the
+   collating sequence of the current locale — the wrapper only defaults `LC_ALL`
+   to `C`, it does not override a user who has set it.
 
 ---
 
