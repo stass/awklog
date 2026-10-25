@@ -1,0 +1,10 @@
+% Bytes above 0x7f compare as unsigned bytes, so they sort after every
+% ASCII byte, whatever the locale or the awk; the empty string sorts first.
+% The values are UTF-8 for e-acute and a no-break space, and a lone 0xff.
+w("z").
+w("é").
+w("").
+w("�").
+w("A").
+w(" ").
+w(X)?

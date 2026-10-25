@@ -1,0 +1,11 @@
+% Several queries in one run: each is sorted on its own, a ground query still
+% answers true or false, a -q query is sorted like the rest, and the blank
+% lines between blocks stay in place.
+n(10).
+n(9).
+e(b, 10).
+e(a, 9).
+e(a, 10).
+n(X)?
+n(9)?
+e(X, Y)?

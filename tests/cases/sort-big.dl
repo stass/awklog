@@ -1,0 +1,11 @@
+% Integers beyond 2^53 are stored as the doubles they round to, and -s
+% orders them numerically as those doubles.  9007199254740993 rounds to
+% 9007199254740992 and is the same value.  As text the exponent forms would
+% sort among the digits.
+n(9007199254740993).
+n(12345678901234567890).
+n(9007199254740991).
+n(-12345678901234567890).
+n(100000000000000000000).
+n(9007199254740992).
+n(X)?

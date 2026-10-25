@@ -25,7 +25,7 @@ d
 It is two files: `awklog`, a POSIX `sh` wrapper that parses the command line,
 and `awklog.awk`, the whole engine. It runs under any POSIX awk — BWK awk (the
 one on macOS and the BSDs), mawk and gawk are all tested — and needs nothing
-else, except `sort(1)` for `-s`.
+else.
 
 ## Contents
 
@@ -68,7 +68,7 @@ usage: awklog [-Wcnsv] [-D mode] [-F format] [-q query] [file ...]
   -h          print this message and exit
   -n          suppress query output
   -q query    run a query after loading the program; repeatable
-  -s          sort each query's rows
+  -s          sort each query's rows by value
   -v          verbose diagnostics; repeatable
   -W          treat warnings as errors
 
@@ -232,7 +232,8 @@ $ printf 'n(9007199254740992).\nn(9007199254740993).\nn(X)?\n' | awklog
 
 Very large values also print in exponent form: `12345678901234567890` comes
 out as `1.2345678901234567e+19`. A leading zero is not significant, so
-`007` and `7` are one value.
+`007` and `7` are one value. A literal beyond the largest double, about
+1.8 × 10³⁰⁸, is an error where it is written.
 
 If exact large numbers matter, as they do for 64-bit identifiers, hashes and
 timestamps in nanoseconds, write them as strings or symbols. Equality on
@@ -266,13 +267,25 @@ the string `"foo"` look alike, and a query can print two rows that look
 identical but are distinct. (text still tells them apart when a string needs
 quoting.)
 
-**`-s`** sorts each query's rows through `sort(1)`, with `LC_ALL=C` unless
-the environment sets `LC_ALL`, so the order is by bytes. Each query is sorted
-on its own, so the blank-line-separated blocks stay intact. A csv field
-containing a newline spans two lines, and `sort` sorts lines, so it would be
-torn apart; awklog allows the combination but warns the first time it happens
-(an error under `-W`; see [Diagnostics](#diagnostics-and-exit-status)).
-tsv has no such problem.
+**`-s`** sorts each query's rows by their values, not by their printed text.
+Rows compare column by column, from the first, and values compare in this
+order:
+
+- integers first, then symbols, then strings;
+- integers numerically, so `9` comes before `10` and `-20` before `-3`;
+  beyond 2⁵³ they compare as the doubles they are stored as
+  (see [Numbers](#numbers));
+- symbols by spelling and strings by contents, byte by byte as unsigned
+  bytes, a prefix before any longer value: `""` before `"a"` before `"ab"`,
+  and `"Z"` before `"a"` before any byte above 0x7f.
+
+This is the order relic's `-s` sorts by. It is total, since no two rows of a
+result are equal, so a sorted result is the same under both engines and
+every awk. Each query is sorted on its own, so the blank-line-separated
+blocks stay intact, and the output format does not affect the order: a csv
+value holding a newline sorts with its row. Byte order needs the C locale,
+since BWK awk and gawk `--posix` otherwise compare strings by the locale's
+collation; the wrapper always runs awk with `LC_ALL=C`.
 
 ## Diagnostics and exit status
 
@@ -295,17 +308,14 @@ Warnings say `warning:` where errors say `error:`. They do not stop the run
 or change the exit status. The warnings are:
 
 - an undefined predicate ([Semantics](#semantics));
-- a derived predicate nothing reads ([Semantics](#semantics));
-- `-s` meeting a csv row that holds a newline
-  ([Output formats](#output-formats)), which carries no location.
+- a derived predicate nothing reads ([Semantics](#semantics)).
 
 **`-W`** treats warnings as errors. Each is reported with `error:` in place
 of `warning:` and the same text, and, like any error, the first one stops the
-run with status 1. Nothing after it is checked, evaluated or printed; only the
-csv warning arises while queries run, and the rows produced before it still
-come out. Stopping at the first matches the rest of awklog: fix it and run
-again. A program that draws no warning runs under `-W` exactly as without
-it, so `awklog -c -W rules.dl` is a check that fails on anything doubtful:
+run with status 1, before anything is evaluated or printed. Stopping at the
+first matches the rest of awklog: fix it and run again. A program that
+draws no warning runs under `-W` exactly as without it, so
+`awklog -c -W rules.dl` is a check that fails on anything doubtful:
 
 ```text
 $ awklog -c -W rules.dl
@@ -340,10 +350,11 @@ with `-v` yourself. The on/off switches (`awklog_check`, `awklog_quiet`,
 `awklog_sort` and `awklog_werror`) take `0` or `1`; any other value is a
 usage error rather than a quiet "off".
 
-Two things the wrapper does are not done without it. `awklog_sort` runs a
-plain `sort`, which orders rows by the current locale; set `LC_ALL=C` to get
-the byte order `-s` gives. And a file operand awk cannot read is reported by
-awk itself, in its own words.
+Two things the wrapper does are not done without it. It runs awk with
+`LC_ALL=C`, because BWK awk and gawk `--posix` compare strings by the
+locale's collation; set `LC_ALL=C` yourself to get the byte order `-s`
+promises. And a file operand awk cannot read is reported by awk itself, in
+its own words.
 
 Diagnostics go to `/dev/stderr`. On a system without it, set `AWKLOG_STDERR`
 (or `-v awklog_stderr=`) to another file.
@@ -420,8 +431,9 @@ with the file and line number each came from. All the real work happens in
    `not` well defined.
 6. **Run queries** against the finished relations, in source order and then
    `-q` order. A query joins exactly like a rule, but the last step prints a
-   row instead of storing a tuple. `-s` pipes each query's rows through
-   `sort(1)` on their own, since POSIX awk has no sort function.
+   row instead of storing a tuple. Under `-s` a query keeps its rows and
+   sorts them before printing, with a merge sort over a typed comparison,
+   since POSIX awk has no sort function.
 
 **Values and tuples.** Every constant is stored with a type tag: `s:foo` for
 a symbol, `q:foo` for a string, `n:42` for a number. That's why `foo`,

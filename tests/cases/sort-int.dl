@@ -1,0 +1,10 @@
+% -s orders integers numerically: as text, 10 would sort before 9, 1017
+% before 155, and -20 before -3.
+n(10).
+n(9).
+n(1017).
+n(155).
+n(-3).
+n(-20).
+n(0).
+n(X)?

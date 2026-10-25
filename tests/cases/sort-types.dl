@@ -1,0 +1,13 @@
+% Values of different types share a column here.  -s puts integers first,
+% then symbols, then strings, so the symbol foo and the string "foo", which
+% print alike, still land in separate, predictable places.
+v(b).
+v("a").
+v(3).
+v(a).
+v("b").
+v(-1).
+v(foo).
+v("foo").
+v("").
+v(X)?

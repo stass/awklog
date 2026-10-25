@@ -1,0 +1,9 @@
+% -s compares decoded values, not their stored spelling, which escapes the
+% backslash and the SUBSEP byte (0x1c, written raw in the string below):
+% stored, 0x1c would sort after "0".  tsv still writes a backslash as \\.
+x("a]").
+x("a\\").
+x("a[").
+x("a0").
+x("a").
+x(X)?

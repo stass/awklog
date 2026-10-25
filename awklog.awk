@@ -97,9 +97,7 @@ function init() {
 	else
 		FIELDSEP = " "
 
-	# -s sorts each query's rows on their way out through sort(1), the only
-	# sort available without asort().  The dump uses the same command, and
-	# both close it before the other can run.
+	# The relation dump sorts its rows through sort(1).
 	SORTCMD = "sort"
 
 	src_n = 0
@@ -120,8 +118,6 @@ function init() {
 	stat_iterations = 0
 	max_stratum = 0
 	join_stop = 0
-	sort_open = 0
-	sort_warned = 0
 	delta_active = 0
 	delta_lit = 0
 	delta_pending = 0
@@ -789,6 +785,13 @@ function parse_term(r,   k) {
 		pt_kind = 3
 		pt_val = value_encode("q", tok_text)
 	} else if (k == "INT") {
+		# A literal past the largest double becomes infinity, which each
+		# awk spells its own way ("inf", "+inf") and mawk reads back as
+		# 0, so it would be neither one value nor one spelling.
+		if (tok_text + 0 > 1.7976931348623157e308 ||
+		    tok_text + 0 < -1.7976931348623157e308)
+			die(source_where(tok_ln, tok_col), "error: integer literal " \
+				"out of range: beyond the largest double, about 1.8e308")
 		pt_kind = 4
 		pt_val = value_encode("n", tok_text)
 	} else {
@@ -1579,79 +1582,18 @@ function run_queries(   q) {
 # fail without it.
 #
 # query_print() is for the blank line between blocks, row_print() for the
-# rows themselves, which -s diverts through sort(1).
+# rows themselves.
 function query_print(line) {
 	if (!opt_dump && !opt_quiet)
 		print line
 }
 
 function row_print(line) {
-	if (opt_dump || opt_quiet)
-		return
-	if (!opt_sort) {
+	if (!opt_dump && !opt_quiet)
 		print line
-		return
-	}
-	# An RFC 4180 field holding a newline spans lines, and sort(1) sorts
-	# lines, so this row is about to be pulled apart.  Refusing -s for csv
-	# outright would cost every result that holds no newline, which is
-	# nearly all of them, so the combination is allowed and diagnosed --
-	# once, on the first row it actually damages.
-	if (opt_format == "csv" && !sort_warned && index(line, "\n")) {
-		sort_warned = 1
-		warn("", "-s cannot sort a csv row containing a newline: "\
-			"RFC 4180 spells such a value across lines and "\
-			"sort(1) will separate them")
-	}
-	if (!sort_open) {
-		# The rows reach the terminal through sort's stdout and not
-		# through awk's, so anything already printed -- the blank line
-		# that separates this block from the last one, above all -- has
-		# to be pushed out first or it could land after them.  fflush()
-		# is the one function here that POSIX adopted only in its 2024
-		# edition; every awk in practical use has long had it.
-		fflush()
-		sort_open = 1
-	}
-	print line | SORTCMD
 }
 
-# Each query is sorted on its own rather than the whole output at once, so
-# closing the pipe here is what keeps one block's rows from mixing with the
-# next one's.
-function rows_flush() {
-	if (sort_open) {
-		sort_open = 0
-		sort_close(SORTCMD, "the query's rows")
-	}
-}
-
-# Rows leave through sort's stdout, so a sort that could not run takes them
-# with it and awklog would otherwise exit 0 having printed nothing, which a
-# pipeline reads as "no rows matched".  Only two of the four tested awks
-# report it -- mawk and gawk return 127 from close() on a failed pipe,
-# BWK awk and gawk --posix return 0 -- but all four return 0 on success, so
-# the check never fires wrongly and catches the failure where it can.
-#
-# Only ever called on a pipe that has been written to: close() of a command
-# that was never opened returns -1 on all four, which would read here as a
-# failure that never happened.
-function sort_close(cmd, what,   status) {
-	status = close(cmd)
-	if (status == 0)
-		return
-	# SIGPIPE is not a failure, it is the reader leaving: awklog -s f.dl
-	# | head kills sort once head has what it wants, and mawk and gawk
-	# report that here as 269 (256 + 13).  Taking it for a failed sort
-	# would make an ordinary pipeline exit 1 with a bogus diagnostic --
-	# and intermittently, since it depends on whether the reader went
-	# first.  The modulus covers a host that returns the bare signal.
-	if (status % 256 == 13)
-		return
-	die("", "sort failed (status " status "): cannot produce " what)
-}
-
-function query_run(r,   n) {
+function query_run(r,   n, i) {
 	array_clear(query_seen)
 	# Belt and braces: join() unbinds at every level on the way out, the
 	# ground short-circuit included, so this is already empty.  A query
@@ -1659,6 +1601,10 @@ function query_run(r,   n) {
 	array_clear(bind_has)
 	query_rows = 0
 	query_ground = (rule_head_arity[r] == 0)
+	# Under -s the rows are kept and sorted once the last is in, since no
+	# order can be decided before then -- unless nothing will be printed.
+	found_keep = opt_sort && !opt_quiet && !opt_dump
+	found_n = 0
 	join_stop = 0
 	# A query scans complete relations, never a delta: evaluation has
 	# finished, and delta_lit is left pointing at whatever body position
@@ -1672,32 +1618,159 @@ function query_run(r,   n) {
 	# No columns means a ground query -- including one whose only
 	# variables are anonymous, since those are never projected -- and a
 	# ground query answers true or false.
-	if (query_ground)
+	if (query_ground) {
 		row_print(query_rows > 0 ? "true" : "false")
-	rows_flush()
+		return
+	}
+	# Each query is sorted on its own, so the blank-line-separated blocks
+	# stay intact.
+	if (found_keep) {
+		found_sort(rule_head_arity[r])
+		for (i = 1; i <= found_n; i++)
+			row_print(found_format(found_order[i], rule_head_arity[r]))
+		found_clear()
+	}
 }
 
 # Columns are the named variables in order of first appearance.
 # Two bindings of the anonymous variables can project one row, so rows are
 # deduplicated on their encoded values rather than on the printed text: a
 # symbol and a string can print alike in text format and are still distinct.
-function query_emit(r,   k, v, key, row) {
+function query_emit(r,   k, n, key, row) {
 	query_rows++
 	if (query_ground) {
 		join_stop = 1
 		return
 	}
+	n = rule_head_arity[r]
 	key = ""
-	row = ""
-	for (k = 1; k <= rule_head_arity[r]; k++) {
-		v = bind_val[rule_head_val[r, k]]
-		key = key SUBSEP v
-		row = (k == 1) ? format_field(v) : row FIELDSEP format_field(v)
-	}
+	for (k = 1; k <= n; k++)
+		key = key SUBSEP bind_val[rule_head_val[r, k]]
 	if (key in query_seen)
 		return
 	query_seen[key] = 1
+	if (found_keep) {
+		found_add(r, n)
+		return
+	}
+	row = format_field(bind_val[rule_head_val[r, 1]])
+	for (k = 2; k <= n; k++)
+		row = row FIELDSEP format_field(bind_val[rule_head_val[r, k]])
 	row_print(row)
+}
+
+# Found row i, n columns wide, in the output format.
+function found_format(i, n,   k, row) {
+	row = format_field(found_val[i, 1])
+	for (k = 2; k <= n; k++)
+		row = row FIELDSEP format_field(found_val[i, k])
+	return row
+}
+
+# A sorted query's rows are dropped once printed rather than held until
+# the run ends.
+function found_clear() {
+	array_clear(found_val)
+	array_clear(found_rank)
+	array_clear(found_key)
+	array_clear(found_order)
+	array_clear(merge_tmp)
+	found_n = 0
+}
+
+# ----------------------------------------------------------------- order ---
+#
+# -s sorts rows by their values, not by their printed text, so that 9 comes
+# before 10 and a symbol never sorts by how it happens to look.  The order is
+# relic's:
+#
+#	- across types, integers before symbols before strings;
+#	- integers numerically, beyond 2^53 included, as the doubles they are;
+#	- symbols by spelling and strings by contents, bytewise as unsigned
+#	  bytes, a prefix before any longer value.
+#
+# Rows compare column by column from the first.  Found rows are distinct, and
+# two distinct rows differ in some column, so the order is total and the
+# output does not depend on the order evaluation found them in: it is the
+# same under both engines and under every awk.
+#
+# POSIX awk has no sort function, so this is a bottom-up merge sort over row
+# numbers: O(n log n) comparisons, and no recursion for a large result to
+# drive deep.
+
+# Keeps the current row, with what the sort compares worked out once rather
+# than at every comparison: each value's rank among the types, and its
+# number or its decoded text.  Decoding matters: the escapes of
+# value_escape() do not keep byte order (the SUBSEP byte, spelled \S, would
+# sort after "0").
+function found_add(r, n,   k, v, rank) {
+	found_n++
+	for (k = 1; k <= n; k++) {
+		v = bind_val[rule_head_val[r, k]]
+		rank = index("nsq", substr(v, 1, 1))
+		found_val[found_n, k] = v
+		found_rank[found_n, k] = rank
+		if (rank == 1)
+			found_key[found_n, k] = substr(v, 3) + 0
+		else
+			found_key[found_n, k] = value_decode(substr(v, 3))
+	}
+}
+
+function found_sort(width,   run, lo, mid, hi, i, j, k) {
+	for (i = 1; i <= found_n; i++)
+		found_order[i] = i
+	# Merge neighbouring sorted runs of length run into runs twice as long,
+	# until one run holds everything.  [lo, mid) and [mid, hi] are the two
+	# runs being merged.
+	for (run = 1; run < found_n; run *= 2) {
+		for (lo = 1; lo + run <= found_n; lo += 2 * run) {
+			mid = lo + run
+			hi = lo + 2 * run - 1
+			if (hi > found_n)
+				hi = found_n
+			i = lo
+			j = mid
+			for (k = lo; k <= hi; k++) {
+				# Take from the right run only when its head is
+				# strictly smaller, which keeps the sort stable.
+				if (j <= hi && (i >= mid ||
+				    found_cmp(found_order[j], found_order[i], width) < 0)) {
+					merge_tmp[k] = found_order[j]
+					j++
+				} else {
+					merge_tmp[k] = found_order[i]
+					i++
+				}
+			}
+			for (k = lo; k <= hi; k++)
+				found_order[k] = merge_tmp[k]
+		}
+	}
+}
+
+# Negative, zero or positive as found row a sorts before, with or after b.
+#
+# Strings compare bytewise only in the C locale: BWK awk and gawk --posix
+# compare by the locale's collation otherwise, which is why the wrapper sets
+# LC_ALL=C.  Appending "" makes a text comparison a string comparison by
+# rule, whatever awk thinks of a value that looks like a number.
+function found_cmp(a, b, width,   k, x, y) {
+	for (k = 1; k <= width; k++) {
+		if (found_rank[a, k] != found_rank[b, k])
+			return found_rank[a, k] < found_rank[b, k] ? -1 : 1
+		x = found_key[a, k]
+		y = found_key[b, k]
+		if (found_rank[a, k] != 1) {
+			x = x ""
+			y = y ""
+		}
+		if (x < y)
+			return -1
+		if (x > y)
+			return 1
+	}
+	return 0
 }
 
 # ---------------------------------------------------------------- output ---
@@ -1803,10 +1876,10 @@ function escape_text(s, quotes,   out, i, c) {
 # eaten by a good many readers, so a field carrying one is quoted too.
 #
 # A field holding a newline is quoted and stays as it is, which is what the
-# standard asks for and what makes such a row span lines.  -s sorts lines,
-# so the two do not mix: a csv result whose values carry newlines cannot be
-# sorted meaningfully by anything line-oriented, sort(1) included.  tsv
-# escapes instead of quoting and has no such hole.
+# standard asks for and what makes such a row span lines.  -s sorts rows
+# before they are formatted, so it is unaffected; a consumer that reads the
+# output line by line is not, and tsv, which escapes instead of quoting, is
+# the format for it.
 #
 # gsub() is safe here, unlike in escape_text(): the replacement holds no
 # backslash, which is the only thing POSIX leaves undefined in one.
@@ -1822,10 +1895,10 @@ function csv_quote(s) {
 # Every relation, whole, in an order that does not depend on the engine --
 # the test suite compares this between -D naive and -D semi, and the two
 # insert their tuples in different orders by construction.  Rows therefore go
-# through sort(1) rather than out as stored: it is the same mechanism -s uses
-# and the only sort available without asort().  A predicate's own line
-# carries its size, so that a relation the
-# other engine left empty is a difference and not a silence.
+# through sort(1) rather than out as stored; the order only has to be the
+# same for both engines, not the typed order of -s.  A predicate's own line
+# carries its size, so that a relation the other engine left empty is a
+# difference and not a silence.
 #
 # A value is printed with its type letter and always quoted, so that the
 # symbol foo, the string "foo" and the number 42 stay three distinct rows and
@@ -1856,6 +1929,28 @@ function dump_relations(   p, k, a, t, line) {
 
 function dump_value(v) {
 	return substr(v, 1, 1) text_quote(value_decode(substr(v, 3)))
+}
+
+# The rows leave through sort's stdout, so a sort that could not run takes
+# them with it, and the run would otherwise exit 0 having printed nothing.
+# Only two of the four tested awks report it -- mawk and gawk return 127
+# from close() on a failed pipe, BWK awk and gawk --posix return 0 -- but all
+# four return 0 on success, so the check never fires wrongly and catches the
+# failure where it can.
+#
+# Only ever called on a pipe that has been written to: close() of a command
+# that was never opened returns -1 on all four, which would read here as a
+# failure that never happened.
+function sort_close(cmd, what,   status) {
+	status = close(cmd)
+	if (status == 0)
+		return
+	# SIGPIPE is not a failure, it is the reader leaving early, and mawk
+	# and gawk report it here as 269 (256 + 13).  The modulus covers a host
+	# that returns the bare signal.
+	if (status % 256 == 13)
+		return
+	die("", "sort failed (status " status "): cannot produce " what)
 }
 
 # ------------------------------------------------------------ statistics ---

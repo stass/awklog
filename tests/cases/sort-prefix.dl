@@ -1,0 +1,12 @@
+% Symbols and strings sharing a prefix: the prefix comes first, and the empty
+% string before every other string.
+s("abc").
+s("ab").
+s("abd").
+s("a").
+s("").
+s("b").
+s(abc).
+s(ab).
+s(a).
+s(X)?

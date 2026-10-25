@@ -1,0 +1,8 @@
+% Rows compare column by column: a tie in the first column is broken by the
+% second, with its own typed order (9 before 10, integers before strings).
+p(b, 2).
+p(a, 10).
+p(b, 1).
+p(a, 9).
+p(a, "x").
+p(X, Y)?

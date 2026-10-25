@@ -21,7 +21,7 @@ usage: $prog [-Wcnsv] [-D mode] [-F format] [-q query] [file ...]
   -h          print this message and exit
   -n          suppress query output
   -q query    run a query after loading the program; repeatable
-  -s          sort each query's rows
+  -s          sort each query's rows by value
   -v          verbose diagnostics; repeatable
   -W          treat warnings as errors
 
@@ -137,8 +137,11 @@ AWKLOG_STDERR=${AWKLOG_STDERR:-/dev/stderr}
 export AWKLOG_CHECK AWKLOG_FORMAT AWKLOG_MODE AWKLOG_QUERY AWKLOG_QUIET \
 	AWKLOG_SORT AWKLOG_STDERR AWKLOG_VERBOSE AWKLOG_WERROR
 
-# Byte-deterministic ordering for -s.
-LC_ALL=${LC_ALL:-C}
+# -s orders strings bytewise, and BWK awk and gawk --posix compare strings
+# by the locale's collation, so the locale is C whatever the environment
+# says.  It also gives every awk the same byte semantics for length and
+# columns.
+LC_ALL=C
 export LC_ALL
 
 exec $AWK -f "$interp" "$@"
