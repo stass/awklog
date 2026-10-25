@@ -1,0 +1,8 @@
+% One violated constraint: its row is reported as an error at the
+% constraint's location, the run exits 1, and no query prints anything.
+task(a).
+task(b).
+owner(a, ann).
+owned(T) :- owner(T, _).
+:- task(T), not owned(T).
+owned(T)?

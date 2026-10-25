@@ -1,0 +1,5 @@
+% A violation's values are written as the text format writes them whatever
+% -F says: the string with a space is quoted the text way, not the csv way.
+item(a, "big one").
+item(b, "x,y").
+:- item(X, L).

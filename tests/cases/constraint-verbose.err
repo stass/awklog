@@ -1,0 +1,3 @@
+constraint-verbose.dl:5:1: error: constraint violated: X=a$
+^awklog: 2 constraint(s)$
+^awklog: 1 derived fact(s) in 

@@ -1,0 +1,8 @@
+% A constraint with no named variables says only that it is violated, once,
+% however many rows match: anonymous variables are not reported.  The
+% second constraint holds and is silent.
+initialized.
+edge(a, b).
+edge(b, c).
+:- edge(_, _).
+:- not initialized.

@@ -1,0 +1,2 @@
+constraint-werror.dl:6:1: error: constraint violated: X=1
+constraint-werror.dl:6:1: error: constraint violated: X=2

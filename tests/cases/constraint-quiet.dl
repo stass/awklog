@@ -1,0 +1,5 @@
+% -n suppresses query rows, not violations: they are still reported and the
+% run still fails.
+p(a).
+:- p(X).
+p(X)?

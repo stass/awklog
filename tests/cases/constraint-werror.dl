@@ -1,0 +1,6 @@
+% -W does not change how constraints report: every violation still prints,
+% and the warnings it turns into errors are a separate matter -- this
+% program draws none.
+p(1).
+p(2).
+:- p(X).

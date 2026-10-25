@@ -1,0 +1,11 @@
+% A constraint over a negated derived predicate: every reviewed change must
+% have an approval, directly or through a delegate.  The negated predicate
+% sits in a lower stratum and is complete when the constraint runs.
+change(c1).
+change(c2).
+change(c3).
+approved(c1, ann).
+delegate(c2, c1).
+ok(C) :- approved(C, _).
+ok(C) :- delegate(C, D), ok(D).
+:- change(C), not ok(C).

@@ -1,0 +1,12 @@
+% A constraint with comparisons: no reading may lie outside its sensor's
+% range.  Variables used only in a comparison are bound by the positive
+% literals, and every named variable is reported, in order of first
+% appearance.
+range(t1, 0, 100).
+range(t2, -40, 40).
+reading(t1, 50).
+reading(t1, 120).
+reading(t2, -41).
+reading(t2, 0).
+:- reading(S, V), range(S, Lo, Hi), V < Lo.
+:- reading(S, V), range(S, Lo, Hi), V > Hi.

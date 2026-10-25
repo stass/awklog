@@ -1,0 +1,1 @@
+constraint-unsafe.dl:5:14: error: unsafe constraint: variable 'Y' in 'not q/1' is not bound by a positive body literal

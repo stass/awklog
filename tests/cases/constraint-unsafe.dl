@@ -1,0 +1,5 @@
+% A constraint is checked for safety like a query, before anything runs: a
+% variable under "not" must be bound by a positive literal.
+p(a).
+q(a).
+:- p(X), not q(Y).

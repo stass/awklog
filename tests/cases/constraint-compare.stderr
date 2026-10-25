@@ -1,0 +1,2 @@
+constraint-compare.dl:11:1: error: constraint violated: S=t2, V=-41, Lo=-40, Hi=40
+constraint-compare.dl:12:1: error: constraint violated: S=t1, V=120, Lo=0, Hi=100

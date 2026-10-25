@@ -1,0 +1,2 @@
+% -q takes queries only, and a constraint is not one.
+p(a).

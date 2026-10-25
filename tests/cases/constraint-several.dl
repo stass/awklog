@@ -1,0 +1,19 @@
+% Every violation of every constraint is reported before the run fails --
+% unlike other errors, the first does not stop it.  Constraints come in
+% source order, and each one's rows in the typed order of -s (9 before 10,
+% integers before symbols before strings) whatever order evaluation found
+% them in.  Values are written as text output writes them, so a string
+% that needs quotes gets them.  The derived predicate the first constraint
+% reads is complete before any constraint runs.
+size(c, 10).
+size(a, 9).
+size(e, 12).
+size(z, 1).
+limit(5).
+big(N, X) :- size(X, N), limit(L), N > L.
+:- big(N, X).
+:- label(L, X), L != 3.
+label("big one", b).
+label(small, d).
+label(3, f).
+label(7, g).

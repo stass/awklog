@@ -1,0 +1,4 @@
+% -c parses and checks constraints but evaluates nothing, so one that would
+% fail at run time passes the check.
+p(a).
+:- p(X).

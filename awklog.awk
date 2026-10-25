@@ -37,7 +37,10 @@ END {
 	stratify()
 	if (!opt_check) {
 		evaluate()
-		run_queries()
+		if (run_constraints() > 0)
+			exit_code = 1
+		else
+			run_queries()
 		if (opt_dump)
 			dump_relations()
 	}
@@ -106,6 +109,7 @@ function init() {
 	tuple_n = 0
 	rule_n = 0
 	query_n = 0
+	constraint_n = 0
 	stat_files = 0
 	stat_input_facts = 0
 	stat_dup_facts = 0
@@ -549,10 +553,11 @@ function tuple_add(p, n, argv,   key, t, k) {
 
 # ---------------------------------------------------------------- parser ---
 #
-# Recursive descent with one token of lookahead.  Facts, rules and queries
-# all become rules: a fact is a rule with an empty body, and a query is a rule
-# whose synthetic head carries its named variables in order of first
-# appearance.  Parsed objects are integer ids into flat arrays -- rule_*[r],
+# Recursive descent with one token of lookahead.  Facts, rules, queries and
+# constraints all become rules: a fact is a rule with an empty body, a query
+# is a rule whose synthetic head carries its named variables in order of
+# first appearance, and a constraint is a query whose rows are violations.
+# Parsed objects are integer ids into flat arrays -- rule_*[r],
 # rule_lit_*[r, i], term_*[r, i, k] -- rather than ASTs encoded as strings.
 #
 # The head of a fact or rule is parsed as body literal 1 and moved by
@@ -578,7 +583,10 @@ function parse_program(query_only) {
 }
 
 function parse_statement(query_only,   r, k, n) {
-	lex_peek()
+	if (lex_peek() == ":-") {
+		parse_constraint(query_only)
+		return
+	}
 	r = rule_new(pk_ln, pk_col)
 	parse_literal(r, 1)
 	k = lex_peek()
@@ -588,15 +596,7 @@ function parse_statement(query_only,   r, k, n) {
 			die(source_where(rule_line[r], rule_col[r]),
 				"syntax error: a rule head must be a positive atom")
 		rule_promote_head(r)
-		n = 0
-		for (;;) {
-			n++
-			parse_literal(r, n)
-			if (lex_peek() != ",")
-				break
-			lex_next()
-		}
-		rule_body_n[r] = n
+		rule_body_n[r] = parse_body(r)
 		expect(".", "'.'")
 	} else if (k == ".") {
 		lex_next()
@@ -640,6 +640,45 @@ function parse_statement(query_only,   r, k, n) {
 	}
 }
 
+# constraint := ":-" body "."
+#
+# A rule with no head is an integrity constraint: its body must never hold,
+# and each row that satisfies it is a violation.  It is parsed as a query --
+# rule_is_query is set, and the synthetic head carries its named variables --
+# because that is what it is: a body run against the finished relations,
+# whose rows are reported instead of printed.  Everything that takes a query
+# to define nothing (the dependency graph, the strata, the unused-predicate
+# check) takes a constraint the same way without knowing about it, and its
+# body literals count as uses, as a query's do.
+function parse_constraint(query_only,   r) {
+	r = rule_new(pk_ln, pk_col)
+	lex_next()
+	rule_body_n[r] = parse_body(r)
+	expect(".", "'.'")
+	if (query_only)
+		die(source_where(rule_line[r], rule_col[r]),
+			"error: only queries may be given with -q")
+	rule_is_query[r] = 1
+	rule_is_constraint[r] = 1
+	rule_query_head(r)
+	constraint_n++
+	constraint_rule[constraint_n] = r
+}
+
+# body := literal ("," literal)*   -- into positions 1.. of rule r; returns
+# the number of literals.
+function parse_body(r,   n) {
+	n = 0
+	for (;;) {
+		n++
+		parse_literal(r, n)
+		if (lex_peek() != ",")
+			break
+		lex_next()
+	}
+	return n
+}
+
 function rule_new(ln, col,   r) {
 	rule_n++
 	r = rule_n
@@ -651,6 +690,7 @@ function rule_new(ln, col,   r) {
 	rule_var_n[r] = 0
 	rule_is_fact[r] = 0
 	rule_is_query[r] = 0
+	rule_is_constraint[r] = 0
 	return r
 }
 
@@ -922,7 +962,8 @@ function check_head_safety(r, bound,   k, s, where) {
 		if (s in bound)
 			continue
 		if (rule_is_query[r])
-			die(where, "error: unsafe query: variable '" var_display(r, s) \
+			die(where, "error: unsafe " rule_noun(r) ": variable '" \
+				var_display(r, s) \
 				"' is not bound by a positive body literal")
 		die(where, "error: unsafe rule: variable '" var_display(r, s) \
 			"' in the head of " predicate_label(rule_head_pred[r]) \
@@ -1013,6 +1054,8 @@ function operand_where(r, i, k) {
 }
 
 function rule_noun(r) {
+	if (rule_is_constraint[r])
+		return "constraint"
 	return rule_is_query[r] ? "query" : "rule"
 }
 
@@ -1555,6 +1598,53 @@ function emit_head(r,   p, n, k, t, argv) {
 	}
 }
 
+# ----------------------------------------------------------- constraints ---
+#
+# Constraints run after the last stratum and before any query, so a violated
+# one leaves stdout empty.  Unlike every other error, a violation does not
+# stop the run at the first: it is a fact about the data rather than a
+# mistake in the program, and the point of a constraint is to list every bad
+# row in one run.  So every constraint runs, every violating row is
+# reported, and only then does the run fail.  -W has no say here: a
+# violation is an error already.
+
+# Returns the number of violations; END turns any into status 1 after
+# skipping the queries, and still prints the dump and the statistics, since
+# evaluation did finish.
+function run_constraints(   c, violations) {
+	violations = 0
+	for (c = 1; c <= constraint_n; c++)
+		violations += constraint_check(constraint_rule[c])
+	return violations
+}
+
+# Reports each row that satisfies constraint r and returns how many there
+# were.  The rows come out in the typed order of -s, so the report is the same
+# under both engines and every awk.  A constraint with no named variables
+# has at most one row and says only that it is violated.
+function constraint_check(r,   where, width, rows, i, k, line) {
+	query_find(r, 1)
+	where = source_where(rule_line[r], rule_col[r])
+	if (query_ground) {
+		if (query_rows > 0)
+			print where ": error: constraint violated" > STDERR
+		return query_rows > 0
+	}
+	width = rule_head_arity[r]
+	found_sort(width)
+	for (i = 1; i <= found_n; i++) {
+		line = where ": error: constraint violated: "
+		for (k = 1; k <= width; k++)
+			line = line (k > 1 ? ", " : "") \
+				rule_var_name[r, rule_head_val[r, k]] "=" \
+				format_value(found_val[found_order[i], k])
+		print line > STDERR
+	}
+	rows = found_n
+	found_clear()
+	return rows
+}
+
 # --------------------------------------------------------------- queries ---
 #
 # Queries run after the fixpoint, in source order with any -q queries last.
@@ -1593,28 +1683,10 @@ function row_print(line) {
 		print line
 }
 
-function query_run(r,   n, i) {
-	array_clear(query_seen)
-	# Belt and braces: join() unbinds at every level on the way out, the
-	# ground short-circuit included, so this is already empty.  A query
-	# must not inherit a binding from anything.
-	array_clear(bind_has)
-	query_rows = 0
-	query_ground = (rule_head_arity[r] == 0)
+function query_run(r,   i) {
 	# Under -s the rows are kept and sorted once the last is in, since no
 	# order can be decided before then -- unless nothing will be printed.
-	found_keep = opt_sort && !opt_quiet && !opt_dump
-	found_n = 0
-	join_stop = 0
-	# A query scans complete relations, never a delta: evaluation has
-	# finished, and delta_lit is left pointing at whatever body position
-	# the last rule run designated.
-	delta_lit = 0
-	n = plan_rule(r, 0)
-	join(r, n, 1)
-	# Cleared on the way out too: a ground query leaves the flag set, and
-	# the next query reads the same flag inside join().
-	join_stop = 0
+	query_find(r, opt_sort && !opt_quiet && !opt_dump)
 	# No columns means a ground query -- including one whose only
 	# variables are anonymous, since those are never projected -- and a
 	# ground query answers true or false.
@@ -1630,6 +1702,32 @@ function query_run(r,   n, i) {
 			row_print(found_format(found_order[i], rule_head_arity[r]))
 		found_clear()
 	}
+}
+
+# Runs the body of query r against the finished relations.  Its rows go to
+# query_emit(), which prints each one at once or, when keep is set, keeps it
+# in the found rows for the caller.  query_rows counts the rows found, and a
+# ground query stops at the first.
+function query_find(r, keep,   n) {
+	array_clear(query_seen)
+	# Belt and braces: join() unbinds at every level on the way out, the
+	# ground short-circuit included, so this is already empty.  A query
+	# must not inherit a binding from anything.
+	array_clear(bind_has)
+	query_rows = 0
+	query_ground = (rule_head_arity[r] == 0)
+	found_keep = keep
+	found_n = 0
+	join_stop = 0
+	# A query scans complete relations, never a delta: evaluation has
+	# finished, and delta_lit is left pointing at whatever body position
+	# the last rule run designated.
+	delta_lit = 0
+	n = plan_rule(r, 0)
+	join(r, n, 1)
+	# Cleared on the way out too: a ground query leaves the flag set, and
+	# the next query reads the same flag inside join().
+	join_stop = 0
 }
 
 # Columns are the named variables in order of first appearance.
@@ -1960,6 +2058,8 @@ function print_stats(   p) {
 	note(pred_n " predicate(s), " stat_input_facts " input fact(s), " \
 		stat_rules " rule(s), " query_n " query(s), " \
 		(max_stratum + 1) " stratum(s)")
+	if (constraint_n > 0)
+		note(constraint_n " constraint(s)")
 	if (stat_dup_facts > 0)
 		note(stat_dup_facts " duplicate fact(s) collapsed")
 	if (stat_undefined > 0)

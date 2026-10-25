@@ -1,0 +1,2 @@
+constraint-format.dl:5:1: error: constraint violated: X=a, L="big one"
+constraint-format.dl:5:1: error: constraint violated: X=b, L=x,y

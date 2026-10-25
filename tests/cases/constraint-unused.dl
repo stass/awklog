@@ -1,0 +1,5 @@
+% A predicate read only by a constraint is used: no "derived but never used"
+% warning, and nothing else on stderr since the constraint holds.
+reading(t1, 50).
+negative(S) :- reading(S, V), V < 0.
+:- negative(S).

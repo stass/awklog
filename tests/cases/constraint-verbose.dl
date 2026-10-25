@@ -1,0 +1,7 @@
+% Evaluation finishes before constraints run, so -v still reports what it
+% cost after a violation, and counts the constraints.
+p(a).
+q(X) :- p(X).
+:- q(X).
+:- p(b).
+q(X)?

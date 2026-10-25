@@ -122,9 +122,9 @@ the commands worth running on it.
 
 ## The language
 
-A program is a sequence of facts, rules and queries, each ended by a `.` or,
-for a query, a `?`. Whitespace and line breaks between tokens do not matter;
-`%` starts a comment that runs to the end of the line.
+A program is a sequence of facts, rules, constraints and queries, each ended
+by a `.` or, for a query, a `?`. Whitespace and line breaks between tokens do
+not matter; `%` starts a comment that runs to the end of the line.
 
 ```prolog
 % Facts: ground rows of a relation.
@@ -140,6 +140,9 @@ unfinished(X) :- status(X, todo).
 blocked(X) :- depends(X, Y), unfinished(Y).
 ready(X) :- unfinished(X), not blocked(X).
 urgent(X) :- unfinished(X), priority(X, P), P >= 10.
+
+% Constraints: a rule with no head, whose body must never hold.
+:- status(X, S), S != todo, S != done.
 
 % Queries.
 ready(X)?                           % one column per named variable
@@ -163,12 +166,16 @@ no predicate or symbol called `not`.
 | string | `"Rewrite parser"` | escapes `\\` `\"` `\n` `\t` `\r` and no others; a string may not span lines |
 | integer | `0`, `10`, `-42` | optional `-`, then digits; see [Numbers](#numbers) |
 
-**Variables** are local to the rule or query they appear in. `_` is the
-anonymous variable, and every `_` is a different one: `pair(_, _)` matches
-any pair, not only pairs of equal values.
+**Variables** are local to the rule, constraint or query they appear in.
+`_` is the anonymous variable, and every `_` is a different one:
+`pair(_, _)` matches any pair, not only pairs of equal values.
 
 **Comparisons** are `=`, `!=`, `<`, `<=`, `>` and `>=`. There is no
 arithmetic: `-` is only ever the sign of an integer literal.
+
+**Constraints** use the headless spelling of answer set programming (clingo,
+DLV): `:- body.` states that the body must have no match. It is not
+Prolog's `:- goal.`, a directive run at load time; awklog has no directives.
 
 ## Semantics
 
@@ -182,9 +189,10 @@ rules in a file, and of literals in a body, does not change the result.
   stops when a round derives nothing new.
 - **Safety.** Every variable in a rule's head, in a negated literal, or in a
   comparison must also appear in a positive literal of the same body. The
-  same holds for a query's variables. `=` does not bind a variable in this
-  version; it only compares two values that are already known. Anything else
-  is rejected before evaluation, with the location of the offending literal.
+  same holds for the variables of a query or a constraint. `=` does not bind
+  a variable in this version; it only compares two values that are already
+  known. Anything else is rejected before evaluation, with the location of
+  the offending literal.
 - **Stratified negation.** `not p(X)` is true when that row is absent from
   `p`, and awklog arranges for `p` to be complete before any rule that negates
   it runs. A program in which a predicate depends on itself through a
@@ -203,19 +211,30 @@ rules in a file, and of literals in a body, does not change the result.
   facts is left out; it also means a misspelt predicate shows up as a warning
   and not as an error.
 - **A derived predicate nothing reads draws a warning.** A predicate defined
-  by at least one rule, but named in no rule body (negated or not) and in no
-  query (in the program or given with `-q`), is reported at the head of its
-  first rule: `rules.dl:4:1: warning: predicate eror/1 is derived but never
-  used`. Such a rule computes nothing anyone sees, and the usual cause is a
-  misspelt head, which would otherwise quietly drop the check the rule was
-  written to be. The warning applies even when the run has no queries at
-  all, as in `awklog -c rules.dl`: a predicate no rule reads computes
-  nothing observable there either. A predicate defined only by facts never
-  draws it, because a fact file commonly carries relations a given program
-  does not use. "Read" means named in some body or query, so predicates
-  that read only each other count as used: a recursive predicate whose own
-  rule is its only reader, or two mutually recursive ones that no query
-  reads, draw no warning.
+  by at least one rule, but named in no rule body (negated or not), in no
+  constraint and in no query (in the program or given with `-q`), is
+  reported at the head of its first rule: `rules.dl:4:1: warning: predicate
+  eror/1 is derived but never used`. Such a rule computes nothing anyone
+  sees, and the usual cause is a misspelt head, which would otherwise
+  quietly drop the check the rule was written to be. The warning applies
+  even when the run has no queries at all, as in `awklog -c rules.dl`: a
+  predicate no rule reads computes nothing observable there either. A
+  predicate defined only by facts never draws it, because a fact file
+  commonly carries relations a given program does not use. "Read" means
+  named in some body, constraint or query, so predicates that read only
+  each other count as used: a recursive predicate whose own rule is its
+  only reader, or two mutually recursive ones that no query reads, draw no
+  warning.
+- **Constraints** run once every stratum is complete, before any query. A
+  row that satisfies a constraint's body is a violation. Every violation is
+  reported on standard error (see
+  [Diagnostics](#diagnostics-and-exit-status)), and once all constraints
+  have run the program exits with status 1 without printing any query
+  result. A constraint defines nothing, and the predicates in its body count
+  as used. `-c` checks constraints like the rest of the program but does not
+  evaluate them, so a constraint the data violates still passes `-c`. `-n`
+  hides query rows only: violations are still reported, and the run still
+  fails.
 
 ## Numbers
 
@@ -300,9 +319,9 @@ rules.dl:1:1: error: unsafe rule: variable 'X' in the head of p/1 is not bound b
 <query>:1:8: syntax error: expected a term, found end of input
 ```
 
-The first error stops the run; there is no error recovery. Usage errors carry
-no location: `awklog: unknown output format: json`, `awklog: notes.dl: cannot
-open`.
+The first error stops the run; there is no error recovery. A violated
+constraint is the one exception, below. Usage errors carry no location:
+`awklog: unknown output format: json`, `awklog: notes.dl: cannot open`.
 
 Warnings say `warning:` where errors say `error:`. They do not stop the run
 or change the exit status. The warnings are:
@@ -322,10 +341,29 @@ $ awklog -c -W rules.dl
 rules.dl:4:1: error: predicate eror/1 is derived but never used
 ```
 
+**A violated constraint** is reported once per violating row, at the
+constraint's location, with its named variables in order of first appearance
+and their values written as the text format writes them. A constraint with
+no named variables says only that it is violated:
+
+```text
+checks.dl:12:1: error: constraint violated: X=planner, S=blocked
+checks.dl:12:1: error: constraint violated: X=storage, S="on hold"
+checks.dl:15:1: error: constraint violated
+```
+
+Here, unlike every other error, the first violation does not stop the run. A
+violation is a fact about the data, not a mistake in the program, and a
+constraint exists to list every bad row. So every constraint runs, every
+violation is reported (constraints in source order, each one's rows in the
+order `-s` sorts by), and then the run exits with status 1 without printing
+any query result. `-W` does not change this; a violation is an error
+already.
+
 | status | meaning |
 |---|---|
 | 0 | success, including a run that printed warnings without `-W` |
-| 1 | an error in the program or a query: syntax, safety, stratification, or a run-time comparison error; with `-W`, also any warning |
+| 1 | an error in the program or a query: syntax, safety, stratification, or a run-time comparison error; a violated constraint; with `-W`, also any warning |
 | 2 | a usage error: an unknown option, format or mode, an on/off switch other than 0 or 1 when `awklog.awk` runs directly, a file operand that is missing, unreadable or a directory, or `awklog.awk` not found |
 
 ## Running awklog.awk directly
@@ -406,9 +444,10 @@ with the file and line number each came from. All the real work happens in
 
 1. **Lex and parse.** A hand-written lexer walks a (line, column) cursor over
    the saved lines, so every token knows its `file:line:column` for free. The
-   parser is recursive descent with one token of lookahead. Facts, rules and
-   queries all become *rules*: a fact is a rule with an empty body, and a query
-   is a rule whose head is its list of named variables. Everything gets an
+   parser is recursive descent with one token of lookahead. Facts, rules,
+   queries and constraints all become *rules*: a fact is a rule with an empty
+   body, a query is a rule whose head is its list of named variables, and a
+   constraint is a query whose rows are violations. Everything gets an
    integer id and lives in flat arrays (`rule_lit_pred[r, i]`,
    `term_val[r, i, k]`, …), since POSIX awk has no nested arrays. Each variable
    becomes a small numbered slot, so evaluation never looks up a name.
@@ -429,7 +468,10 @@ with the file and line number each came from. All the real work happens in
 5. **Evaluate** one stratum at a time, lowest first. Lower strata are
    complete and never change while a higher one runs, which is what makes
    `not` well defined.
-6. **Run queries** against the finished relations, in source order and then
+6. **Check constraints** against the finished relations, in source order.
+   Each runs like a query, keeping and sorting its rows; if any constraint
+   has a row, they are all reported and the run fails here.
+7. **Run queries** against the finished relations, in source order and then
    `-q` order. A query joins exactly like a rule, but the last step prints a
    row instead of storing a tuple. Under `-s` a query keeps its rows and
    sorts them before printing, with a merge sort over a typed comparison,

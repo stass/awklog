@@ -1,0 +1,6 @@
+constraint-several.dl:14:1: error: constraint violated: N=9, X=a
+constraint-several.dl:14:1: error: constraint violated: N=10, X=c
+constraint-several.dl:14:1: error: constraint violated: N=12, X=e
+constraint-several.dl:15:1: error: constraint violated: L=7, X=g
+constraint-several.dl:15:1: error: constraint violated: L=small, X=d
+constraint-several.dl:15:1: error: constraint violated: L="big one", X=b
