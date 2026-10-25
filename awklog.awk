@@ -112,6 +112,7 @@ function init() {
 	stat_dup_facts = 0
 	stat_rules = 0
 	stat_undefined = 0
+	stat_unused = 0
 	stat_derived_facts = 0
 	stat_rule_runs = 0
 	stat_tuple_scans = 0
@@ -846,6 +847,7 @@ function check_program(   r) {
 		if (!rule_is_fact[r])
 			check_rule_safety(r)
 	check_undefined()
+	check_unused()
 }
 
 function check_rule_safety(r,   bound, i, k, kind) {
@@ -945,6 +947,38 @@ function check_undefined(   r, i, p) {
 				"undefined predicate " predicate_label(p) \
 				": no facts and no rules, treated as empty")
 		}
+}
+
+# The mirror image of check_undefined(): a rule whose head nothing reads
+# computes nothing observable, and the usual cause is a misspelt head --
+# eror(M) :- p(M). quietly defines eror/1, and the check the rule was meant
+# to be is gone.  "Read" means named in some body, negated or not, or in some
+# query, -q included, since every query is parsed by now.  That makes a
+# predicate read only by its own rules, directly or through mutual
+# recursion, count as used.  Reachability from the queries would catch that
+# too, but it would also flag every predicate that only feeds an unused one,
+# and the misspelt head is the case that matters.
+#
+# Facts are exempt: a fact file commonly carries relations a given program
+# has no use for, just as a missing one is tolerated above.  A predicate is
+# reported once, at the head of its first rule, so the warnings come out in
+# the source order of those rules.
+function check_unused(   r, i, p, read, reported) {
+	for (r = 1; r <= rule_n; r++)
+		for (i = 1; i <= rule_body_n[r]; i++)
+			if (rule_lit_kind[r, i] != 3)
+				read[rule_lit_pred[r, i]] = 1
+	for (r = 1; r <= rule_n; r++) {
+		if (rule_is_fact[r] || rule_is_query[r])
+			continue
+		p = rule_head_pred[r]
+		if ((p in read) || (p in reported))
+			continue
+		reported[p] = 1
+		stat_unused++
+		warn(source_where(rule_line[r], rule_col[r]),
+			"predicate " predicate_label(p) " is derived but never used")
+	}
 }
 
 # Where operand k of comparison i starts.  The literal's own location is its
@@ -1816,6 +1850,8 @@ function print_stats(   p) {
 		note(stat_dup_facts " duplicate fact(s) collapsed")
 	if (stat_undefined > 0)
 		note(stat_undefined " undefined predicate(s) treated as empty")
+	if (stat_unused > 0)
+		note(stat_unused " derived predicate(s) never used")
 	# Only -c skips evaluation, so these would otherwise print a row of
 	# zeros that reads as a result rather than as "not run".
 	if (!opt_check)

@@ -99,9 +99,9 @@ second `-v` adds one line per predicate:
 
 ```text
 $ awklog -v -v -n examples/graph.dl
-awklog: read 37 line(s) from 1 file(s)
-awklog: 5 predicate(s), 5 input fact(s), 6 rule(s), 3 query(s), 2 stratum(s)
-awklog: 42 derived fact(s) in 4 iteration(s), 10 rule run(s), 228 tuple scan(s)
+awklog: read 40 line(s) from 1 file(s)
+awklog: 5 predicate(s), 5 input fact(s), 6 rule(s), 4 query(s), 2 stratum(s)
+awklog: 42 derived fact(s) in 4 iteration(s), 10 rule run(s), 248 tuple scan(s)
 awklog: edge/2: 5 tuple(s), stratum 0
 awklog: node/1: 6 tuple(s), stratum 0
 awklog: path/2: 13 tuple(s), stratum 0, recursive
@@ -201,6 +201,20 @@ rules in a file, and of literals in a body, does not change the result.
   on standard error. This lets a program run when the file holding some of its
   facts is left out; it also means a misspelt predicate shows up as a warning
   and not as an error.
+- **A derived predicate nothing reads draws a warning.** A predicate defined
+  by at least one rule, but named in no rule body (negated or not) and in no
+  query (in the program or given with `-q`), is reported at the head of its
+  first rule: `rules.dl:4:1: warning: predicate eror/1 is derived but never
+  used`. Such a rule computes nothing anyone sees, and the usual cause is a
+  misspelt head, which would otherwise quietly drop the check the rule was
+  written to be. The warning applies even when the run has no queries at
+  all, as in `awklog -c rules.dl`: a predicate no rule reads computes
+  nothing observable there either. A predicate defined only by facts never
+  draws it, because a fact file commonly carries relations a given program
+  does not use. "Read" means named in some body or query, so predicates
+  that read only each other count as used: a recursive predicate whose own
+  rule is its only reader, or two mutually recursive ones that no query
+  reads, draw no warning.
 
 ## Numbers
 
@@ -365,7 +379,9 @@ with the file and line number each came from. All the real work happens in
 3. **Check safety.** For each rule, collect every variable that some positive
    literal binds, then insist that every variable in the head, in a negation
    and in a comparison is among them. This ignores the order the body is
-   written in, because evaluation reorders it anyway.
+   written in, because evaluation reorders it anyway. The same stage warns
+   about a predicate that is read but never defined, and one that is derived
+   but never read.
 4. **Stratify.** Build the predicate dependency graph (an edge from each rule
    head to each body predicate, marked positive or negative) and take its
    transitive closure. A negative edge whose target leads back to its source

@@ -1,0 +1,6 @@
+check-unused-order.dl:8:1: warning: predicate zeta/1 is derived but never used
+check-unused-order.dl:9:1: warning: predicate seen/1 is derived but never used
+check-unused-order.dl:10:1: warning: predicate alpha/1 is derived but never used
+awklog: read 11 line(s) from 1 file(s)
+awklog: 4 predicate(s), 2 input fact(s), 4 rule(s), 0 query(s), 1 stratum(s)
+awklog: 3 derived predicate(s) never used

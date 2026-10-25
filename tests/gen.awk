@@ -29,7 +29,10 @@
 #	  number, since elsewhere a variable may be bound to a symbol and the
 #	  program would stop on a run-time type error, which both engines
 #	  would reach alike and so prove nothing.  Mixed programs use = and !=,
-#	  which is where foo, "foo" and 42 have to stay distinct.
+#	  which is where foo, "foo" and 42 have to stay distinct;
+#	- a query or two at random, then one for each derived predicate that
+#	  no rule or query reads yet, so that awklog has no unused predicate
+#	  to warn about.
 #
 # The first line is a comment summarising what the program contains, which
 # tests/fuzz.sh tallies so that a run can show it exercised something.
@@ -89,6 +92,12 @@ BEGIN {
 	n = 1 + rnd(2)
 	for (i = 1; i <= n; i++)
 		emit_query()
+	# awklog warns about a derived predicate that nothing reads, so every
+	# one left unread gets a query of its own.  These come last and draw
+	# no random numbers, so the rest of each seed's program is unaffected.
+	for (p = nbase + 1; p <= npred; p++)
+		if (!(p in pread))
+			emit(atom(p, query_vars(p)) "?")
 
 	printf "%% gen seed=%d numeric=%d facts=%d rules=%d recursive=%d " \
 		"negations=%d comparisons=%d\n", seed, numeric, stat_facts,
@@ -183,6 +192,7 @@ function emit_rule(h, base_case,   lv, npos, nneg, ncmp, i, k, p, args, t,
 	npos = 1 + rnd(3)
 	for (i = 1; i <= npos; i++) {
 		p = body_pred(lv, base_case)
+		pread[p] = 1
 		if (plevel[p] == lv)
 			rec = 1
 		args = ""
@@ -208,6 +218,7 @@ function emit_rule(h, base_case,   lv, npos, nneg, ncmp, i, k, p, args, t,
 	nneg = rnd(3) == 0 ? 1 + rnd(2) : 0
 	for (i = 1; i <= nneg; i++) {
 		p = body_pred(lv, 1)
+		pread[p] = 1
 		args = ""
 		for (k = 1; k <= parity[p]; k++)
 			args = args (k > 1 ? ", " : "") bound_term()
@@ -246,10 +257,19 @@ function emit_rule(h, base_case,   lv, npos, nneg, ncmp, i, k, p, args, t,
 # not be evaluated would change the exit status the driver compares.
 function emit_query(   p, k, args) {
 	p = nbase + 1 + rnd(nderived)
+	pread[p] = 1
 	args = ""
 	for (k = 1; k <= parity[p]; k++)
 		args = args (k > 1 ? ", " : "") (rnd(3) == 0 ? const_pick() : "Q" k)
 	emit(atom(p, args) "?")
+}
+
+# A query over every column of p, all of them variables.
+function query_vars(p,   k, args) {
+	args = ""
+	for (k = 1; k <= parity[p]; k++)
+		args = args (k > 1 ? ", " : "") "Q" k
+	return args
 }
 
 function array_clear(a,   k) {

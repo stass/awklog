@@ -1,0 +1,7 @@
+% A misspelt rule head defines a predicate nothing reads, so the check the
+% rule was meant to be silently disappears.  Both halves of the mistake are
+% reported -- the head nobody reads, and the predicate the query expected --
+% and the run still succeeds, printing what the query finds.
+bad(x).
+eror(M) :- bad(M).
+error(M)?

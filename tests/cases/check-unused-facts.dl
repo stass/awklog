@@ -1,0 +1,9 @@
+% A predicate defined only by facts draws no warning even though nothing
+% reads it: a fact file commonly carries relations a given program has no
+% use for.
+edge(a, b).
+colour(a, red).
+weight(a, b, 3).
+flag.
+reach(X, Y) :- edge(X, Y).
+reach(X, Y)?

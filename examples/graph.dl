@@ -35,3 +35,6 @@ cyclic(X)?
 
 % Is f reachable from a?  A query with no variables answers true or false.
 path(a, f)?
+
+% Which nodes can a not reach?
+unreachable(a, X)?

@@ -1,0 +1,7 @@
+% A predicate read only by a query written in the program is used, and so is
+% one read only by a query that also reads another predicate.
+edge(a, b).
+source(X) :- edge(X, _).
+sink(Y) :- edge(_, Y).
+source(X)?
+edge(X, Y), sink(Y)?

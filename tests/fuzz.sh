@@ -11,8 +11,9 @@
 # engine artefact.  Checked for each program:
 #
 #	- both engines exit 0 and print nothing on stderr under every awk: the
-#	  program is legal by construction and defines every predicate it
-#	  reads, so any diagnostic, a warning included, is a bug;
+#	  program is legal by construction, defines every predicate it
+#	  reads and reads every predicate it derives, so any diagnostic, a
+#	  warning included, is a bug;
 #	- the two engines' output is byte-identical;
 #	- every awk's output is byte-identical to the first awk's, which makes
 #	  this a portability sweep over programs nobody wrote by hand;

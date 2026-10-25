@@ -1,0 +1,9 @@
+parse-forms.dl:14:18: warning: undefined predicate status/2: no facts and no rules, treated as empty
+parse-forms.dl:20:13: warning: undefined predicate todo/1: no facts and no rules, treated as empty
+parse-forms.dl:20:26: warning: undefined predicate blocked/1: no facts and no rules, treated as empty
+parse-forms.dl:25:12: warning: undefined predicate pair/2: no facts and no rules, treated as empty
+parse-forms.dl:14:1: warning: predicate unfinished/1 is derived but never used
+parse-forms.dl:20:1: warning: predicate ready/1 is derived but never used
+parse-forms.dl:21:1: warning: predicate cmp/1 is derived but never used
+parse-forms.dl:22:1: warning: predicate mixed/1 is derived but never used
+parse-forms.dl:25:1: warning: predicate anon/1 is derived but never used

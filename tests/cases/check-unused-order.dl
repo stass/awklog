@@ -1,0 +1,11 @@
+% Every derived predicate that no body and no query reads is reported, once,
+% at the head of its first rule, in the source order of those rules.  Facts
+% alone never draw the warning, and a predicate with facts as well as rules
+% is located at its first rule, not at its first fact.  The program has no
+% queries at all and is still checked: nothing it derives would be seen.
+edge(a, b).
+seen(a).
+zeta(X) :- edge(X, _).
+seen(X) :- edge(_, X).
+alpha(X) :- edge(X, _).
+zeta(Y) :- edge(_, Y).

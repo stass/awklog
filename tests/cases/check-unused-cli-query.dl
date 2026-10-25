@@ -1,0 +1,4 @@
+% A predicate read only by a -q query is used.
+edge(a, b).
+node(X) :- edge(X, _).
+node(Y) :- edge(_, Y).

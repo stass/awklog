@@ -1,0 +1,7 @@
+% A predicate read only under "not" is used: the negation depends on it.
+task(a).
+task(b).
+done(a).
+finished(X) :- done(X).
+open(X) :- task(X), not finished(X).
+open(X)?

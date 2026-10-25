@@ -16,6 +16,9 @@
 #			in an operand, which the -D it appends cannot follow
 #	NAME.out	expected stdout, byte-exact	(default: empty)
 #	NAME.err	expected stderr, one pattern per line, each must match
+#	NAME.stderr	expected stderr, byte-exact once the case directory is
+#			stripped from file names; an empty file pins that
+#			nothing is reported at all
 #	NAME.status	expected exit status		(default: 0)
 #
 # Every case runs under -D semi and -D naive, under every awk found, and both
@@ -172,6 +175,23 @@ run_case() {
 			report_fail "$base" "$awkcmd" "$mode" \
 				"stderr does not match: $missing"
 			sed 's/^/    | /' "$tmp/err"
+			return 1
+		fi
+	fi
+
+	# The harness names every program by its absolute path, which no
+	# expected file can spell, so the directory is stripped first.  It is
+	# matched as a fixed string, since a path may hold regex characters.
+	if [ -f "$name.stderr" ]; then
+		dir="$cases/" awk '{
+			dir = ENVIRON["dir"]
+			while ((i = index($0, dir)) > 0)
+				$0 = substr($0, 1, i - 1) substr($0, i + length(dir))
+			print
+		}' "$tmp/err" > "$tmp/err.rel"
+		if ! diff -u "$name.stderr" "$tmp/err.rel" > "$tmp/diff" 2>&1; then
+			report_fail "$base" "$awkcmd" "$mode" "stderr differs"
+			sed 's/^/    | /' "$tmp/diff"
 			return 1
 		fi
 	fi

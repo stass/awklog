@@ -1,0 +1,2 @@
+check-unused.dl:7:1: warning: undefined predicate error/1: no facts and no rules, treated as empty
+check-unused.dl:6:1: warning: predicate eror/1 is derived but never used
