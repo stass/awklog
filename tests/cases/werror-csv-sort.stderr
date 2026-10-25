@@ -1,0 +1,1 @@
+awklog: error: -s cannot sort a csv row containing a newline: RFC 4180 spells such a value across lines and sort(1) will separate them

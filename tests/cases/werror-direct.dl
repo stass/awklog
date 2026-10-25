@@ -1,0 +1,4 @@
+% Run without the wrapper, -v awklog_werror=1 is -W.
+p(a).
+q(X) :- p(X), r(X).
+q(X)?

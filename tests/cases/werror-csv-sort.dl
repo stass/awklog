@@ -1,0 +1,6 @@
+% The -s csv-newline warning is an error under -W too.  The offending row is
+% the only one, so nothing has reached sort(1) when the run stops.  The
+% relation dump prints no query rows, so the warning cannot arise there and
+% the differential run is skipped.
+t(1, "nl\nhere").
+t(N, V)?

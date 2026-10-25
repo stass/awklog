@@ -1,0 +1,4 @@
+% awklog.awk checks the setting by value: anything but 0 or 1 is a usage
+% error, never a quiet "off".
+p(a).
+p(X)?

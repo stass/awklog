@@ -1,0 +1,5 @@
+% Every on/off switch is checked by value when awklog.awk runs directly: a
+% value read as a number would be 0, so a mistyped "true" would quietly mean
+% "off" and this run would evaluate after all.
+p(a).
+p(X)?

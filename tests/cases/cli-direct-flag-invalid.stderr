@@ -1,0 +1,1 @@
+awklog: awklog_check / AWKLOG_CHECK must be 0 or 1, not 'true'

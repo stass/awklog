@@ -1,0 +1,1 @@
+werror-undefined.dl:5:19: error: undefined predicate r/1: no facts and no rules, treated as empty

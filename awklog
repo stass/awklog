@@ -13,7 +13,7 @@ prog=${0##*/}
 
 usage() {
 	cat <<USAGE
-usage: $prog [-cnsv] [-D mode] [-F format] [-q query] [file ...]
+usage: $prog [-Wcnsv] [-D mode] [-F format] [-q query] [file ...]
 
   -c          check the program only; do not evaluate or print results
   -D mode     evaluation engine: semi (default) or naive
@@ -23,6 +23,7 @@ usage: $prog [-cnsv] [-D mode] [-F format] [-q query] [file ...]
   -q query    run a query after loading the program; repeatable
   -s          sort each query's rows
   -v          verbose diagnostics; repeatable
+  -W          treat warnings as errors
 
 With no file operands the program is read from standard input.
 
@@ -39,10 +40,11 @@ format=
 quiet=
 sort=
 verbose=0
+werror=
 query=
 queries=0
 
-while getopts cD:F:hnq:sv opt; do
+while getopts cD:F:hnq:svW opt; do
 	case $opt in
 	c)	check=1 ;;
 	D)	mode=$OPTARG ;;
@@ -58,6 +60,7 @@ $OPTARG"
 		queries=$((queries + 1)) ;;
 	s)	sort=1 ;;
 	v)	verbose=$((verbose + 1)) ;;
+	W)	werror=1 ;;
 	*)	usage >&2; exit 2 ;;
 	esac
 done
@@ -129,9 +132,10 @@ AWKLOG_QUERY=$query
 AWKLOG_QUIET=$quiet
 AWKLOG_SORT=$sort
 AWKLOG_VERBOSE=$verbose
+AWKLOG_WERROR=$werror
 AWKLOG_STDERR=${AWKLOG_STDERR:-/dev/stderr}
 export AWKLOG_CHECK AWKLOG_FORMAT AWKLOG_MODE AWKLOG_QUERY AWKLOG_QUIET \
-	AWKLOG_SORT AWKLOG_STDERR AWKLOG_VERBOSE
+	AWKLOG_SORT AWKLOG_STDERR AWKLOG_VERBOSE AWKLOG_WERROR
 
 # Byte-deterministic ordering for -s.
 LC_ALL=${LC_ALL:-C}

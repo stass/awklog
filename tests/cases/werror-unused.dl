@@ -1,0 +1,6 @@
+% The use -W exists for: a check run over a rule file fails, with status 1,
+% when a misspelt head would otherwise quietly disable the rule.
+bad(x).
+eror(M) :- bad(M).
+error(M) :- bad(M).
+error(M)?

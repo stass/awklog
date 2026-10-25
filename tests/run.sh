@@ -13,7 +13,9 @@
 #			awklog_* assignments rather than options
 #	NAME.nodump	present when the case legitimately dumps no relations
 #	NAME.nodiff	present to skip the differential run: NAME.args ends
-#			in an operand, which the -D it appends cannot follow
+#			in an operand, which the -D it appends cannot follow,
+#			or the case fails on a query row, which the dump
+#			never prints, so its exit status would differ there
 #	NAME.out	expected stdout, byte-exact	(default: empty)
 #	NAME.err	expected stderr, one pattern per line, each must match
 #	NAME.stderr	expected stderr, byte-exact once the case directory is
@@ -53,7 +55,7 @@ export AWKLOG_AWK
 # awklog.awk without it, so a stray AWKLOG_QUIET in the caller's shell would
 # otherwise silence that case's output.
 unset AWKLOG_CHECK AWKLOG_DUMP AWKLOG_FORMAT AWKLOG_MODE AWKLOG_QUERY \
-	AWKLOG_QUIET AWKLOG_SORT AWKLOG_STDERR AWKLOG_VERBOSE
+	AWKLOG_QUIET AWKLOG_SORT AWKLOG_STDERR AWKLOG_VERBOSE AWKLOG_WERROR
 
 if [ ! -x "$AWKLOG" ]; then
 	echo "run.sh: $AWKLOG is not executable" >&2

@@ -60,7 +60,7 @@ install under any prefix finds its own interpreter.
 ## Usage
 
 ```text
-usage: awklog [-cnsv] [-D mode] [-F format] [-q query] [file ...]
+usage: awklog [-Wcnsv] [-D mode] [-F format] [-q query] [file ...]
 
   -c          check the program only; do not evaluate or print results
   -D mode     evaluation engine: semi (default) or naive
@@ -70,6 +70,7 @@ usage: awklog [-cnsv] [-D mode] [-F format] [-q query] [file ...]
   -q query    run a query after loading the program; repeatable
   -s          sort each query's rows
   -v          verbose diagnostics; repeatable
+  -W          treat warnings as errors
 
 With no file operands the program is read from standard input.
 
@@ -269,7 +270,8 @@ quoting.)
 the environment sets `LC_ALL`, so the order is by bytes. Each query is sorted
 on its own, so the blank-line-separated blocks stay intact. A csv field
 containing a newline spans two lines, and `sort` sorts lines, so it would be
-torn apart; awklog allows the combination but warns the first time it happens.
+torn apart; awklog allows the combination but warns the first time it happens
+(an error under `-W`; see [Diagnostics](#diagnostics-and-exit-status)).
 tsv has no such problem.
 
 ## Diagnostics and exit status
@@ -289,11 +291,32 @@ The first error stops the run; there is no error recovery. Usage errors carry
 no location: `awklog: unknown output format: json`, `awklog: notes.dl: cannot
 open`.
 
+Warnings say `warning:` where errors say `error:`. They do not stop the run
+or change the exit status. The warnings are:
+
+- an undefined predicate ([Semantics](#semantics));
+- a derived predicate nothing reads ([Semantics](#semantics));
+- `-s` meeting a csv row that holds a newline
+  ([Output formats](#output-formats)), which carries no location.
+
+**`-W`** treats warnings as errors. Each is reported with `error:` in place
+of `warning:` and the same text, and, like any error, the first one stops the
+run with status 1. Nothing after it is checked, evaluated or printed; only the
+csv warning arises while queries run, and the rows produced before it still
+come out. Stopping at the first matches the rest of awklog: fix it and run
+again. A program that draws no warning runs under `-W` exactly as without
+it, so `awklog -c -W rules.dl` is a check that fails on anything doubtful:
+
+```text
+$ awklog -c -W rules.dl
+rules.dl:4:1: error: predicate eror/1 is derived but never used
+```
+
 | status | meaning |
 |---|---|
-| 0 | success, including a run that printed warnings |
-| 1 | an error in the program or a query: syntax, safety, stratification, or a run-time comparison error |
-| 2 | a usage error: an unknown option, format or mode, a file operand that is missing, unreadable or a directory, or `awklog.awk` not found |
+| 0 | success, including a run that printed warnings without `-W` |
+| 1 | an error in the program or a query: syntax, safety, stratification, or a run-time comparison error; with `-W`, also any warning |
+| 2 | a usage error: an unknown option, format or mode, an on/off switch other than 0 or 1 when `awklog.awk` runs directly, a file operand that is missing, unreadable or a directory, or `awklog.awk` not found |
 
 ## Running awklog.awk directly
 
@@ -306,13 +329,16 @@ awk -v awklog_query='path(a, X)?' -v awklog_format=csv -f awklog.awk graph.dl
 
 Every option has an `awklog_*` variable: `awklog_query` (several queries
 separated by newlines), `awklog_format`, `awklog_mode`, `awklog_sort`,
-`awklog_quiet`, `awklog_check` and `awklog_verbose`. Each can also be given as
-an `AWKLOG_*` environment variable, which is how the wrapper passes them. The
-environment is used because `awk -v` interprets backslash escapes in its value
-and would corrupt a query holding a `\n` inside a string. When both are set,
-`-v` wins, unless its value is empty: an empty `-v` assignment counts as not
-given, so it cannot clear a setting the environment makes. Mind that same escape processing when passing a query with `-v`
-yourself.
+`awklog_quiet`, `awklog_check`, `awklog_verbose` and `awklog_werror`. Each
+can also be given as an `AWKLOG_*` environment variable, which is how the
+wrapper passes them. The environment is used because `awk -v` interprets
+backslash escapes in its value and would corrupt a query holding a `\n`
+inside a string. When both are set, `-v` wins, unless its value is empty: an
+empty `-v` assignment counts as not given, so it cannot clear a setting the
+environment makes. Mind that same escape processing when passing a query
+with `-v` yourself. The on/off switches (`awklog_check`, `awklog_quiet`,
+`awklog_sort` and `awklog_werror`) take `0` or `1`; any other value is a
+usage error rather than a quiet "off".
 
 Two things the wrapper does are not done without it. `awklog_sort` runs a
 plain `sort`, which orders rows by the current locale; set `LC_ALL=C` to get

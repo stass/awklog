@@ -1,0 +1,1 @@
+werror-unused.dl:4:1: error: predicate eror/1 is derived but never used

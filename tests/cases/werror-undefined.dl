@@ -1,0 +1,7 @@
+% Under -W a warning is an error, and the first one stops the run as any
+% error does: the undefined predicate is reported with "error:", the unused
+% one after it never is, nothing is evaluated and no query prints.
+p(a).
+q(X) :- p(X), not r(X).
+s(X) :- p(X).
+q(X)?

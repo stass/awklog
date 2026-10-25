@@ -70,9 +70,10 @@ function init() {
 	opt_query = opt_str(awklog_query, "AWKLOG_QUERY", "")
 	opt_format = opt_str(awklog_format, "AWKLOG_FORMAT", "text")
 	opt_mode = opt_str(awklog_mode, "AWKLOG_MODE", "semi")
-	opt_check = opt_num(awklog_check, "AWKLOG_CHECK", 0)
-	opt_quiet = opt_num(awklog_quiet, "AWKLOG_QUIET", 0)
-	opt_sort = opt_num(awklog_sort, "AWKLOG_SORT", 0)
+	opt_check = opt_flag(awklog_check, "check")
+	opt_quiet = opt_flag(awklog_quiet, "quiet")
+	opt_sort = opt_flag(awklog_sort, "sort")
+	opt_werror = opt_flag(awklog_werror, "werror")
 	opt_verbose = opt_num(awklog_verbose, "AWKLOG_VERBOSE", 0)
 	# Undocumented, and deliberately absent from the wrapper: the test
 	# harness sets it to have every relation printed after evaluation, so
@@ -80,7 +81,7 @@ function init() {
 	# over what the queries happen to ask.
 	# It also suppresses the queries' own rows -- see query_print() -- so
 	# that what reaches stdout is the model and nothing else.
-	opt_dump = opt_num(awklog_dump, "AWKLOG_DUMP", 0)
+	opt_dump = opt_flag(awklog_dump, "dump")
 
 	if (opt_format != "text" && opt_format != "csv" && opt_format != "tsv")
 		usage_error("unknown output format: " opt_format)
@@ -142,6 +143,19 @@ function opt_num(v, name, dflt) {
 	return opt_str(v, name, dflt) + 0
 }
 
+# An on/off switch, awklog_NAME or AWKLOG_NAME, is 0 or 1 and nothing else.
+# Read as a number, any other value would be 0, and a mistyped "yes" would
+# quietly turn a switch off -- -W above all, whose job is to make a run fail.
+# The result is a number, so "if (opt_x)" means what it says: the string "0"
+# would test true.
+function opt_flag(v, name,   s) {
+	s = opt_str(v, "AWKLOG_" toupper(name), "0")
+	if (s != "0" && s != "1")
+		usage_error("awklog_" name " / AWKLOG_" toupper(name) \
+			" must be 0 or 1, not '" s "'")
+	return s == "1"
+}
+
 # ------------------------------------------------------------ diagnostics ---
 
 # Messages carry their own classification ("syntax error: ...", "error:
@@ -170,7 +184,12 @@ function usage_error(msg) {
 	exit 2
 }
 
+# Every warning comes through here, so -W is one test: the warning becomes
+# an error, and like any error it ends the run at once.  The message keeps
+# its text and changes only its classification.
 function warn(where, msg) {
+	if (opt_werror)
+		die(where, "error: " msg)
 	if (where != "")
 		print where ": warning: " msg > STDERR
 	else
