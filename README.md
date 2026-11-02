@@ -3,6 +3,10 @@
 awklog is Datalog in AWK: facts, rules, recursion, queries and stratified
 negation in a single portable AWK program with no dependencies.
 
+awklog is intended as a small building block for tools such as build systems
+or generators that produce C source from formal specifications. It is kept
+deliberately small and simple, and is not designed for extremely large datasets.
+
 ```prolog
 % path.dl
 edge(a, b).
@@ -23,9 +27,8 @@ d
 ```
 
 It is two files: `awklog`, a POSIX `sh` wrapper that parses the command line,
-and `awklog.awk`, the whole engine. It runs under any POSIX awk — BWK awk (the
-one on macOS and the BSDs), mawk and gawk are all tested — and needs nothing
-else.
+and `awklog.awk`, the whole engine. It runs under any POSIX awk. BWK awk (the
+one on macOS and the BSDs), mawk and gawk are all tested. It has no other dependencies.
 
 ## Contents
 
@@ -213,18 +216,9 @@ rules in a file, and of literals in a body, does not change the result.
 - **A derived predicate nothing reads draws a warning.** A predicate defined
   by at least one rule, but named in no rule body (negated or not), in no
   constraint and in no query (in the program or given with `-q`), is
-  reported at the head of its first rule: `rules.dl:4:1: warning: predicate
-  eror/1 is derived but never used`. Such a rule computes nothing anyone
+  reported at the head of its first rule. Such a rule computes nothing anyone
   sees, and the usual cause is a misspelt head, which would otherwise
-  quietly drop the check the rule was written to be. The warning applies
-  even when the run has no queries at all, as in `awklog -c rules.dl`: a
-  predicate no rule reads computes nothing observable there either. A
-  predicate defined only by facts never draws it, because a fact file
-  commonly carries relations a given program does not use. "Read" means
-  named in some body, constraint or query, so predicates that read only
-  each other count as used: a recursive predicate whose own rule is its
-  only reader, or two mutually recursive ones that no query reads, draw no
-  warning.
+  quietly drop the check the rule was written to be.
 - **Constraints** run once every stratum is complete, before any query. A
   row that satisfies a constraint's body is a violation. Every violation is
   reported on standard error (see
@@ -510,20 +504,7 @@ repeated work, but it can't miss derivations from a predicate that has both
 facts and rules. A stratum that reads nothing it derives never enters the
 loop.
 
-**The naive engine as a reference.** `-D naive` re-runs every rule in the
-stratum until a whole pass adds nothing. It shares the join, the planner and
-the tuple store with the semi-naive engine, which differs only in which rules
-it re-runs and what one literal scans. The test suite runs everything
-through both engines and requires identical results. The comparison uses an
-undocumented `AWKLOG_DUMP=1` hook that prints every relation, sorted and typed.
-
-**Portability habits.** Membership is always tested with `(k in a)`, since
-`if (a[k])` silently creates the element. Arrays are emptied with a loop,
-since `delete a` is not POSIX. `CONVFMT`, `OFMT` and `SUBSEP` are pinned in
-`BEGIN`, because changing them would quietly change which values count as
-the same.
-
-## Not in this version
+## Deliberately absent
 
 - An interactive mode. `-q`, `-v` and repeated runs cover the same ground,
   and keeping the engine batch-only means an error always ends the run.
